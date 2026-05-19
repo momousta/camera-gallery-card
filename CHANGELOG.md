@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.12.0](https://github.com/TheScubaDiver/camera-gallery-card/compare/v2.11.0...v2.12.0) (2026-05-19)
+
+
+### Features
+
+* **toolbar:** per-button visibility toggles for the gallery toolbar ([#150](https://github.com/TheScubaDiver/camera-gallery-card/issues/150)) ([0e965b3](https://github.com/TheScubaDiver/camera-gallery-card/commit/0e965b3763a895218f59cc664d78faf36c04f1a1))
+
+
+### Bug Fixes
+
+* don't render offline placeholder over grid layout ([#142](https://github.com/TheScubaDiver/camera-gallery-card/issues/142)) ([9088601](https://github.com/TheScubaDiver/camera-gallery-card/commit/9088601d3eeb3e7c8ecdb9718bf416ab132103b8))
+
+
+### Documentation
+
+* **readme:** clarify timestamp parsing + add quick-start, troubleshooting and feature gaps ([#151](https://github.com/TheScubaDiver/camera-gallery-card/issues/151)) ([44817fd](https://github.com/TheScubaDiver/camera-gallery-card/commit/44817fd9491d4426bb4d459e70550d410fdfa10a))
+
 ## [2.11.0](https://github.com/TheScubaDiver/camera-gallery-card/compare/v2.10.0...v2.11.0) (2026-05-16)
 
 
