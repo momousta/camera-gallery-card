@@ -277,7 +277,7 @@ Then in the card editor: **General → Delete services → Frigate** → pick `r
 
 Opt-in URL parameters so an HA notification action can open this exact card straight into live view or the gallery. Nothing here does anything until you set `url_id` — without it the card ignores the query string entirely, which matters because the query string is page-scoped and would otherwise be picked up by every camera-gallery-card on the dashboard at once.
 
-Set a `url_id` in the editor's **Viewer** tab (or `url_id: porch` in YAML), then point a notification action at:
+Set a `url_id` in the editor's **Source → View** section (or `url_id: porch` in YAML), then point a notification action at:
 
 ```
 /lovelace/home?cgc_id=porch&cgc_camera=camera.porch_gate
@@ -287,7 +287,7 @@ Set a `url_id` in the editor's **Viewer** tab (or `url_id: porch` in YAML), then
 |---|---|
 | `cgc_id` | Must match the card's `url_id` exactly, or the whole query string is ignored |
 | `cgc_view` | `live` or `gallery` — which screen to open |
-| `cgc_camera` | A camera entity from the card's own live camera list — opens live view on that camera |
+| `cgc_camera` | An entry from the card's own live camera list — a camera entity, or a `live_stream_urls` stream — opens live view on that camera |
 
 A worked example, e.g. from a motion automation:
 
@@ -299,13 +299,16 @@ data:
     clickAction: "/lovelace/home?cgc_id=porch&cgc_camera=camera.porch_gate"
 ```
 
-`?cgc_id=porch&cgc_view=gallery` opens the gallery on the newest clip — regardless of your `thumb_sort_order` setting, so a "motion detected" notification never lands on footage from weeks ago.
+`?cgc_id=porch&cgc_view=gallery` opens the gallery on the newest clip regardless of `thumb_sort_order` — with one caveat: once a day has more items than `max_media` (default 50), the gallery only ever holds the oldest `max_media` of them under `oldest` sorting, so the deep link lands on the newest clip *within that truncated window*, not necessarily the day's actual newest clip. That truncation applies to `oldest` sorting generally, deep link or not.
 
 > [!NOTE]
 > `cgc_camera` only works together with live view. The gallery's sources are configured separately from the live camera list, and the card has no camera-to-clip mapping, so a camera can't filter the gallery. Passing `cgc_camera` therefore implies live view — and an explicit `cgc_view=gallery` makes `cgc_camera` be ignored.
 
 > [!NOTE]
 > Deep links apply when the card first initializes on page load. Navigating to the same URL within an already-open dashboard may not re-run that initialization, since Home Assistant is a single-page app — for a reliable deep link, the notification should open the dashboard fresh (e.g. via `clickAction`) rather than assume a tab already on the dashboard will react.
+
+> [!NOTE]
+> All of `cgc_id`, `cgc_view`, and `cgc_camera` are case-sensitive. `cgc_view=Gallery` isn't recognized as `gallery` — and if a camera is also present, that falls through to opening *live* instead, the opposite of what a mistyped gallery link probably intended. And if more than one card on the dashboard shares the same `url_id`, they'll all react to the same query string at once — keep `url_id` unique per card.
 
 ---
 
