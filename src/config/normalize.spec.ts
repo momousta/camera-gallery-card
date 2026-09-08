@@ -613,6 +613,15 @@ describe("url_id (issue #218)", () => {
       /invalid config/
     );
   });
+
+  it("accepts a 64-char slug and rejects a 65-char one", () => {
+    const at64 = "a".repeat(64);
+    const { config } = normalizeConfig({ ...minimalSensor, url_id: at64 });
+    expect(config.url_id).toBe(at64);
+
+    const at65 = "a".repeat(65);
+    expect(() => normalizeConfig({ ...minimalSensor, url_id: at65 })).toThrow(/invalid config/);
+  });
 });
 
 describe("preview_close_on_tap inherits clean_mode by default", () => {

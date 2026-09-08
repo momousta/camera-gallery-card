@@ -73,7 +73,7 @@ describe("parseUrlActions — empty/degenerate search strings", () => {
     expect(parse({ search: search as string | null })).toEqual({ view: null, camera: null });
   });
 
-  it("a malformed query string URLSearchParams still parses does not throw and yields nulls for cgc_view", () => {
+  it("a malformed query string that URLSearchParams still parses does not throw, and yields nulls for cgc_view", () => {
     expect(() => parse({ search: "?=&&cgc_view", urlId: "porch" })).not.toThrow();
     // No cgc_id present at all (the string has no `cgc_id=` key), so this
     // is gated out by rule 2 regardless of what cgc_view does.
@@ -169,6 +169,21 @@ describe("parseUrlActions — cgc_camera", () => {
       view: null,
       camera: null,
     });
+  });
+
+  it("allow-list membership is exact, not prefix — a truncated entity id is rejected", () => {
+    expect(
+      parse({ search: "?cgc_id=porch&cgc_camera=camera.porch", cameras: ["camera.porch_gate"] })
+    ).toEqual({ view: null, camera: null });
+  });
+
+  it("accepts a synthetic stream id (the __cgc_stream_N__ form from live_stream_urls) as cgc_camera", () => {
+    expect(
+      parse({
+        search: "?cgc_id=porch&cgc_camera=__cgc_stream_0__",
+        cameras: ["__cgc_stream_0__", "__cgc_stream_1__"],
+      })
+    ).toEqual({ view: "live", camera: "__cgc_stream_0__" });
   });
 });
 

@@ -979,7 +979,15 @@ class CameraGalleryCard extends LitElement {
         this._viewMode = urlActions.view;
         if (urlActions.view === "media") this._pendingUrlGallerySelectNewest = true;
       }
-      if (urlActions.camera) this._liveSelectedCamera = urlActions.camera;
+      if (urlActions.camera) {
+        this._liveSelectedCamera = urlActions.camera;
+        // A camera deep-link names one camera, so break out of grid layout
+        // onto it — otherwise `isGridLayout()` would stay true and the
+        // deep-linked camera would never actually be shown (issue #218's
+        // reported use case). Reuses the same override `_onGridTileTap`
+        // sets, so the existing "Back to grid" pill picks it up for free.
+        this._liveLayoutOverride = "single";
+      }
       // Fire-and-forget: subscribe to HA's Frigate event push stream.
       this._subscribeFrigateEvents();
       this.requestUpdate();
@@ -5650,6 +5658,11 @@ class CameraGalleryCard extends LitElement {
         if (filtered.length) {
           const sortOrder = String(this.config?.thumb_sort_order || "newest").toLowerCase().trim();
           this._selectedIndex = sortOrder === "oldest" ? filtered.length - 1 : 0;
+          // Also scroll the thumbnail strip to it — under `oldest` sorting
+          // the newest clip lands at the end of the strip, off-screen by
+          // default (see the other `_selectedIndex`/`_pendingScrollToI`
+          // pairs in this file, e.g. `_navNext`/`_navPrev`).
+          this._pendingScrollToI = this._selectedIndex;
         }
       }
 

@@ -22,7 +22,10 @@ export interface UrlActions {
   camera: string | null;
 }
 
-const NULL_ACTIONS: UrlActions = { view: null, camera: null };
+// Frozen — this object is shared across every call that opts out, so it must
+// stay read-only rather than become a footgun for a future caller that
+// mutates its result in place.
+const NULL_ACTIONS: UrlActions = Object.freeze({ view: null, camera: null });
 
 export function parseUrlActions(opts: {
   /** A location search string, with or without the leading "?". */
