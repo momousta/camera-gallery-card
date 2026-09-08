@@ -229,6 +229,7 @@ export interface InputConfig {
   // ─── Misc ──────────────────────────────────────────────────
   max_media?: number;
   sync_entity?: string | null;
+  url_id?: string;
   menu_buttons?: MenuButtonInput[];
 
   // ─── Legacy aliases (rewritten in pre-migrate) ────────────
@@ -529,6 +530,7 @@ function preMigrateConfig(input: InputConfig): PreMigrated {
   trimOptionalString(out, "live_go2rtc_url");
   trimOptionalString(out, "live_go2rtc_stream");
   trimOptionalString(out, "sync_entity");
+  trimOptionalString(out, "url_id");
 
   // Defaulted-to-`""` string fields: trim, never delete.
   out.path_datetime_format = (out.path_datetime_format ?? "").trim();
