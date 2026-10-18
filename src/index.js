@@ -781,7 +781,17 @@ class CameraGalleryCard extends LitElement {
         getAuthToken: () => this._hass?.auth?.data?.access_token ?? null,
         getOrigin: () => window.location.origin,
       },
-      onChange: () => this.requestUpdate(),
+      // Posters land one by one while a strip loads; coalesce the re-renders
+      // they trigger to at most one per frame.
+      onChange: () => this._requestPosterRender(),
+    });
+  }
+
+  _requestPosterRender() {
+    if (this._posterRenderRaf) return;
+    this._posterRenderRaf = requestAnimationFrame(() => {
+      this._posterRenderRaf = 0;
+      this.requestUpdate();
     });
   }
 
@@ -876,6 +886,9 @@ class CameraGalleryCard extends LitElement {
       this._thumbObserver.disconnect();
       this._thumbObserver = null;
     }
+
+    if (this._posterRenderRaf) cancelAnimationFrame(this._posterRenderRaf);
+    this._posterRenderRaf = 0;
 
     // Aborts in-flight captures and revokes every mirrored blob URL.
     // Without this, every captured poster's `URL.createObjectURL` leaked
