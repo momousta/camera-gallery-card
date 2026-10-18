@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CameraGalleryCardConfig } from "../config/normalize";
 import { makeFakeHass, type FakeHass } from "../test/fake-hass";
-import { parseServiceParts, SensorSourceClient, toFsPath, toWebPath } from "./sensor-source";
+import {
+  isTemporaryFilePath,
+  parseServiceParts,
+  SensorSourceClient,
+  toFsPath,
+  toWebPath,
+} from "./sensor-source";
 
 const baseConfig = (overrides: Partial<CameraGalleryCardConfig> = {}): CameraGalleryCardConfig =>
   ({
@@ -90,6 +96,52 @@ describe("parseServiceParts", () => {
   });
 });
 
+describe("isTemporaryFilePath", () => {
+  it("flags files that are still being written or were abandoned mid-write", () => {
+    for (const p of [
+      "/local/snapshots/front_right/_tmp_motion_20261018_054329.mp4.tmp",
+      "/config/www/snapshots/doorbell/visitor_20260711_142203.mp4.TMP",
+      "/local/a/clip.mp4.part",
+      "/local/a/clip.mp4.partial",
+      "/local/a/clip.mp4.crdownload",
+      "/local/a/clip.mp4.download",
+      "/local/a/clip.temp",
+      "/local/a/.clip.swp",
+      "/local/a/clip.mp4~",
+      "/local/a/.gitkeep",
+      "/local/a/.DS_Store",
+    ]) {
+      expect(isTemporaryFilePath(p), p).toBe(true);
+    }
+  });
+
+  it("keeps finished media, whatever the name contains", () => {
+    for (const p of [
+      "/local/snapshots/front_right/motion_20261018_054329.gif",
+      "/local/snapshots/front_right/_tmp_motion_20261018_054329.mp4",
+      "/local/snapshots/doorbell/person_20261017_070820_snapshot.jpg",
+      "/local/tmp/clip.mp4",
+      "/local/a/clip.mp4?v=tmp",
+      "/local/a/clip.part.jpg",
+      "https://nas.local/media/clip.webm#t=3",
+    ]) {
+      expect(isTemporaryFilePath(p), p).toBe(false);
+    }
+  });
+
+  it("ignores query and fragment", () => {
+    expect(isTemporaryFilePath("/local/a/clip.mp4.tmp?x=1")).toBe(true);
+    expect(isTemporaryFilePath("/local/a/clip.mp4.tmp#y")).toBe(true);
+  });
+
+  it("returns false for non-strings and empty input", () => {
+    expect(isTemporaryFilePath("")).toBe(false);
+    expect(isTemporaryFilePath(null)).toBe(false);
+    expect(isTemporaryFilePath(undefined)).toBe(false);
+    expect(isTemporaryFilePath(42)).toBe(false);
+  });
+});
+
 describe("SensorSourceClient.getEntityIds", () => {
   it("returns the configured entities array", () => {
     const client = new SensorSourceClient();
@@ -150,6 +202,34 @@ describe("SensorSourceClient.getItems", () => {
 
     const items = client.getItems();
     expect(items.map((x) => x.src)).toEqual(["/local/single.mp4"]);
+  });
+
+  it("drops temporary and hidden files from array fileLists", () => {
+    hass.setState("sensor.cam", {
+      fileList: [
+        "/config/www/snapshots/front_right/motion_20261018_054500.gif",
+        "/config/www/snapshots/front_right/_tmp_motion_20261018_054329.mp4.tmp",
+        "/config/www/snapshots/front_right/car_20261017_213503_snapshot.jpg",
+        "/config/www/snapshots/front_right/clip.mp4.part",
+        "/config/www/snapshots/front_right/.gitkeep",
+      ],
+    });
+    client.load(baseConfig({ entities: ["sensor.cam"] }));
+
+    expect(client.getItems().map((x) => x.src)).toEqual([
+      "/local/snapshots/front_right/motion_20261018_054500.gif",
+      "/local/snapshots/front_right/car_20261017_213503_snapshot.jpg",
+    ]);
+  });
+
+  it("drops temporary files from JSON-stringified and single-path fileLists", () => {
+    hass.setState("sensor.cam", {
+      fileList: JSON.stringify(["/local/a.mp4", "/local/a.mp4.tmp"]),
+    });
+    hass.setState("sensor.one", { fileList: "/local/b.mp4.crdownload" });
+    client.load(baseConfig({ entities: ["sensor.cam", "sensor.one"] }));
+
+    expect(client.getItems().map((x) => x.src)).toEqual(["/local/a.mp4"]);
   });
 
   it("skips entities missing from hass.states", () => {

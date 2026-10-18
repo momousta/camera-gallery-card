@@ -307,6 +307,28 @@ export class SensorSourceClient {
   }
 }
 
+/** Suffixes of files that are still being written (or were abandoned mid-write). */
+const TEMP_SUFFIX_RE = /(?:\.(?:tmp|temp|part|partial|crdownload|download|swp)|~)$/i;
+
+/**
+ * `true` for paths that can never be a finished media file: temporary or partial downloads
+ * (`clip.mp4.tmp`, `clip.mp4.part`, `clip.mp4~`) and dotfiles (`.gitkeep`, `.DS_Store`).
+ *
+ * Folder-watching sensors such as FileTrack list every file, including the `.tmp` a recorder
+ * writes before renaming it (Home Assistant's `camera.record` does this) and the ones a cancelled
+ * recording leaves behind. Rendered, each became a broken tile that still downloaded the whole
+ * partial file.
+ */
+export function isTemporaryFilePath(p: unknown): boolean {
+  if (typeof p !== "string" || !p) return false;
+  const clean = (p.split("?")[0] ?? "").split("#")[0] ?? "";
+  const name = clean.slice(clean.lastIndexOf("/") + 1);
+  return name.startsWith(".") || TEMP_SUFFIX_RE.test(name);
+}
+
+const toMediaPaths = (list: readonly unknown[]): string[] =>
+  list.map((x) => toWebPath(x)).filter((s): s is string => Boolean(s) && !isTemporaryFilePath(s));
+
 /**
  * Parse a sensor's `fileList` attribute into normalized web paths.
  *
@@ -315,22 +337,19 @@ export class SensorSourceClient {
  *   - a JSON-stringified array (FileTrack legacy)
  *   - a single JSON-stringified path (rare)
  *
- * Returns `string[]` of `/local/`-prefixed web paths. Falsy input → `[]`.
+ * Returns `string[]` of `/local/`-prefixed web paths, without temporary files
+ * ({@link isTemporaryFilePath}). Falsy input → `[]`.
  */
 function parseFileList(raw: unknown): string[] {
   if (!raw) return [];
-  if (Array.isArray(raw)) {
-    return raw.map((x) => toWebPath(x)).filter((s): s is string => Boolean(s));
-  }
+  if (Array.isArray(raw)) return toMediaPaths(raw);
   if (typeof raw === "string") {
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.map((x) => toWebPath(x)).filter((s): s is string => Boolean(s));
-      }
-      return [toWebPath(raw)].filter((s): s is string => Boolean(s));
+      if (Array.isArray(parsed)) return toMediaPaths(parsed);
+      return toMediaPaths([raw]);
     } catch {
-      return [toWebPath(raw)].filter((s): s is string => Boolean(s));
+      return toMediaPaths([raw]);
     }
   }
   return [];
