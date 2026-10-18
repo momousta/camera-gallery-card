@@ -118,3 +118,55 @@ describe("Format functions (locale-dependent)", () => {
     expect(formatMonth("", undefined)).toBe("");
   });
 });
+
+describe("formatter caching (render path formats one label per thumbnail)", () => {
+  it("builds each Intl.DateTimeFormat once per locale/options and keeps the output", () => {
+    const loc = { language: "en-US", number_format: "comma_decimal", time_format: "24" } as never;
+    const first = formatTimeFromMs(Date.UTC(2026, 9, 18, 7, 8), loc);
+    const RealDTF = Intl.DateTimeFormat;
+    let built = 0;
+    const Spy = function (
+      this: unknown,
+      ...args: ConstructorParameters<typeof Intl.DateTimeFormat>
+    ) {
+      built++;
+      return new RealDTF(...args);
+    } as unknown as typeof Intl.DateTimeFormat;
+    Intl.DateTimeFormat = Spy;
+    try {
+      for (let i = 0; i < 50; i++) formatTimeFromMs(Date.UTC(2026, 9, 18, 7, 8), loc);
+      expect(built).toBe(0);
+      expect(formatTimeFromMs(Date.UTC(2026, 9, 18, 7, 8), loc)).toBe(first);
+      // a different locale gets its own formatter, once
+      formatTimeFromMs(1, {
+        language: "nl-NL",
+        number_format: "comma_decimal",
+        time_format: "24",
+      } as never);
+      formatTimeFromMs(2, {
+        language: "nl-NL",
+        number_format: "comma_decimal",
+        time_format: "24",
+      } as never);
+      expect(built).toBe(1);
+    } finally {
+      Intl.DateTimeFormat = RealDTF;
+    }
+  });
+
+  it("12/24-hour choice still follows time_format", () => {
+    const t = Date.UTC(2026, 9, 18, 15, 5);
+    const h24 = formatTimeFromMs(t, {
+      language: "en-US",
+      number_format: "comma_decimal",
+      time_format: "24",
+    } as never);
+    const h12 = formatTimeFromMs(t, {
+      language: "en-US",
+      number_format: "comma_decimal",
+      time_format: "12",
+    } as never);
+    expect(h12).toMatch(/AM|PM/i);
+    expect(h24).not.toMatch(/AM|PM/i);
+  });
+});
