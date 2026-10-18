@@ -205,6 +205,7 @@ export interface InputConfig {
   thumbnail_frame_pct?: number;
   capture_video_thumbnails?: boolean;
   gif_thumbnails?: string;
+  scrub_on_drag?: boolean;
   pill_size?: number;
   row_gap?: number;
   card_height?: number;

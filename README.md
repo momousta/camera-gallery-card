@@ -168,6 +168,7 @@ A few notes on the generic walker:
   - All other sources (NAS, Blue Iris, etc.): first-frame capture
 - Sensor mode: first-frame capture
 - Sensor mode GIF clips: a still first frame by default (`gif_thumbnails: still`). The card fetches only the head of each GIF with an HTTP `Range` request (typically 5–20 % of the file), and caches the still in IndexedDB, so a second visit needs no download at all. `gif_thumbnails: animated` loads and animates the whole GIF in every tile, as before
+- **Drag to scrub** (`scrub_on_drag: true`): press and drag the thumbnail strip; the viewer follows the thumb under the centre line (Ring / iOS Photos style). While you drag, the viewer shows the thumbnail; the clip loads, and a video plays, when you let go. A tap still selects; mouse drag and the mouse wheel scrub too
 - **Paired image + video** — when a snapshot and clip share the same filename stem they're shown as one item, with the image used as the thumbnail
 
 ### Video controls
@@ -298,6 +299,7 @@ Then in the card editor: **General → Delete services → Frigate** → pick `r
 | `thumb_bar_position` | Thumb timestamp bar position |
 | `thumb_sort_order` | `newest_first` or `oldest_first` |
 | `gif_thumbnails` | Sensor-mode GIF tiles: `still` (default; cached first frame from a small `Range` request) or `animated` (whole GIF per tile) |
+| `scrub_on_drag` | Drag the horizontal thumbnail strip to scrub the viewer; clips load on release (default `false`) |
 | `bar_position` | Preview timestamp bar position |
 | `bar_opacity` | Preview timestamp bar opacity |
 | **Live view** | |

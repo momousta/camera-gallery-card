@@ -67,6 +67,7 @@ import {
   DEFAULT_THUMB_SORT_ORDER,
   DEFAULT_THUMBNAIL_FRAME_PCT,
   DEFAULT_GIF_THUMBNAILS,
+  DEFAULT_SCRUB_ON_DRAG,
   DEFAULT_LIVE_LAYOUT,
   LIVE_LAYOUTS,
   MIC_MODES,
@@ -504,6 +505,8 @@ export const cameraGalleryCardConfigStruct = type({
   // Sensor-mode GIF thumbnails: `still` shows a cached first frame fetched
   // with a small Range request; `animated` loads the whole GIF per tile.
   gif_thumbnails: defaulted(enums(GIF_THUMBNAIL_MODES), DEFAULT_GIF_THUMBNAILS),
+  // #152: press and drag the thumbnail strip to scrub the main viewer.
+  scrub_on_drag: defaulted(boolean(), DEFAULT_SCRUB_ON_DRAG),
   pill_size: defaulted(intInRange(PILL_SIZE_MIN, PILL_SIZE_MAX), PILL_SIZE_DEFAULT),
   row_gap: defaulted(intInRange(ROW_GAP_MIN, ROW_GAP_MAX), ROW_GAP_DEFAULT),
   card_height: defaulted(intInRange(CARD_HEIGHT_MIN, CARD_HEIGHT_MAX), CARD_HEIGHT_DEFAULT),

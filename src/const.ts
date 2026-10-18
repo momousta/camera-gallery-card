@@ -344,6 +344,8 @@ export const DEFAULT_THUMBNAIL_FRAME_PCT = 0; // 0% = first frame, 100% = last f
 /** Sensor GIF thumbnails: `still` = cached first frame (fast, owner fork
  * default), `animated` = the whole GIF in the tile (upstream v3.1.0). */
 export const DEFAULT_GIF_THUMBNAILS = "still" satisfies GifThumbnailMode;
+/** #152: drag the thumbnail strip to scrub the main viewer (opt-in). */
+export const DEFAULT_SCRUB_ON_DRAG = false;
 export const DEFAULT_VISIBLE_OBJECT_FILTERS: readonly ObjectFilter[] = [];
 
 // -------- Inline-style fallbacks (used by render(), not styles.ts) --------

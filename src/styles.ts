@@ -1546,6 +1546,37 @@ export const cardStyles = css`
     min-height: 0;
   }
 
+  /* #152 drag-to-scrub (scrub_on_drag): the strip moves under a fixed centre
+   * playhead; the side padding lets the first and last thumb reach it. Snap
+   * is off while a mouse drag scrolls the strip and returns on release. */
+  .tthumbs.horizontal.scrub {
+    scroll-snap-type: x mandatory;
+    padding-inline: calc(50% - var(--cgc-thumb-row-h, 86px) / 2);
+    cursor: grab;
+
+    & .tthumb {
+      scroll-snap-align: center;
+    }
+    &.dragging {
+      scroll-snap-type: none;
+      cursor: grabbing;
+    }
+  }
+
+  .scrub-playhead {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    transform: translateX(-50%);
+    border-radius: 2px;
+    background: var(--primary-color, #03a9f4);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    z-index: 3;
+  }
+
   .tthumbs {
     min-width: 0;
 

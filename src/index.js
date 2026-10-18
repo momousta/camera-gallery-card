@@ -38,6 +38,7 @@ import { CombinedSourceClient } from "./data/combined-source";
 import { canDeleteItem, deleteItem } from "./data/delete-service";
 import { PendingPosterCollector, PosterCacheClient } from "./data/poster-cache";
 import { isGifPath } from "./util/gif-frame";
+import { pickCenterIndex, ScrubGesture } from "./data/scrub";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import {
   detectObjectForSrc,
@@ -429,6 +430,13 @@ class CameraGalleryCard extends LitElement {
     });
     this._favorites = new FavoritesStore({ onChange: () => this.requestUpdate() });
     this._suppressNextThumbClick = false;
+    // #152 drag-to-scrub state (only used when `scrub_on_drag: true`).
+    this._scrubbing = false;
+    this._scrubDragging = false;
+    this._scrubRaf = 0;
+    this._scrubClickBlockUntil = 0;
+    this._stripScrubPointerId = null; // not _scrubPointerId: that one is the video progress bar's
+    this._scrubGesture = new ScrubGesture({ onSettle: () => this._onScrubSettle() });
     this._swipeStartX = 0;
     this._swipeStartY = 0;
     this._swipeCurX = 0;
@@ -842,6 +850,11 @@ class CameraGalleryCard extends LitElement {
     this._teardownLiveView();
 
     this._clearThumbLongPress();
+    this._scrubGesture.reset();
+    if (this._scrubRaf) cancelAnimationFrame(this._scrubRaf);
+    this._scrubRaf = 0;
+    this._scrubbing = false;
+    this._scrubDragging = false;
 
     if (this._thumbObserver) {
       this._thumbObserver.disconnect();
@@ -983,6 +996,13 @@ class CameraGalleryCard extends LitElement {
   // ─── Generic helpers ───────────────────────────────────────────────
 
   _syncPreviewPlaybackFromState() {
+    if (this._scrubbing) {
+      // Debounced media load (#152): the viewer shows the thumbnail until the
+      // gesture settles; clearing also resets the media key so the clip loads
+      // (and autoplays per config) right after.
+      this._clearPreviewVideoHostPlayback();
+      return;
+    }
     if (!this._hass || !this.config) return;
 
     const usingMediaSource = this.config?.source_mode === "media" || this.config?.source_mode === "combined";
@@ -2426,6 +2446,8 @@ class CameraGalleryCard extends LitElement {
   }
 
   _syncCurrentMedia(src) {
+    // Scrubbing changes the selection every frame; sync the final pick only.
+    if (this._scrubbing) return;
     const syncEntity = this.config?.sync_entity;
     if (!syncEntity || !syncEntity.startsWith("input_text.")) return;
     if (!src || src === this._lastSyncedSrc) return;
@@ -4730,6 +4752,121 @@ class CameraGalleryCard extends LitElement {
     return cap;
   }
 
+  // ─── Drag-to-scrub (#152) ─────────────────────────────────────────
+
+  _scrubEnabled() {
+    return this.config?.scrub_on_drag === true && !this._isThumbLayoutVertical();
+  }
+
+  _onScrubPointerDown(e) {
+    if (!this._scrubEnabled() || this._selectMode) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const strip = e.currentTarget;
+    this._stripScrubPointerId = e.pointerId;
+    this._scrubGesture.pointerDown(e.pointerType, e.clientX, strip.scrollLeft);
+  }
+
+  _onScrubPointerMove(e) {
+    if (e.pointerId !== this._stripScrubPointerId) return;
+    const pos = this._scrubGesture.pointerMove(e.clientX);
+    if (pos === null) return;
+    const strip = e.currentTarget;
+    if (!this._scrubDragging) {
+      this._scrubDragging = true;
+      strip.classList.add("dragging"); // snap off now; render keeps the class
+      this._clearThumbLongPress();
+      try {
+        strip.setPointerCapture(e.pointerId);
+      } catch (_) {}
+      this.requestUpdate();
+    }
+    strip.scrollLeft = pos;
+  }
+
+  _onScrubPointerUp(e) {
+    if (e.pointerId !== this._stripScrubPointerId) return;
+    this._stripScrubPointerId = null;
+    const strip = e.currentTarget;
+    const { suppressClick } = this._scrubGesture.pointerUp();
+    if (this._scrubDragging) {
+      this._scrubDragging = false;
+      strip.classList.remove("dragging");
+      try {
+        strip.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+      this.requestUpdate();
+    }
+    // A mouse drag ends with a click on whatever is under the pointer.
+    if (suppressClick) this._scrubClickBlockUntil = performance.now() + 400;
+  }
+
+  _onScrubPointerCancel(e) {
+    if (e.pointerId !== this._stripScrubPointerId) return;
+    this._scrubGesture.pointerCancel();
+    if (this._scrubDragging) {
+      this._scrubDragging = false;
+      e.currentTarget?.classList.remove("dragging");
+      this.requestUpdate();
+    }
+  }
+
+  _onScrubClickCapture(e) {
+    if (performance.now() < this._scrubClickBlockUntil) {
+      this._scrubClickBlockUntil = 0;
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+
+  _scheduleScrubFollow(strip) {
+    if (this._scrubRaf) return;
+    this._scrubRaf = requestAnimationFrame(() => {
+      this._scrubRaf = 0;
+      this._scrubFollow(strip);
+    });
+  }
+
+  /** Select the thumb under the centre playhead. */
+  _scrubFollow(strip) {
+    if (!strip?.isConnected || this._selectMode) return;
+    const r = strip.getBoundingClientRect();
+    const spans = [];
+    for (const t of strip.querySelectorAll(".tthumb")) {
+      const tr = t.getBoundingClientRect();
+      const index = Number(t.dataset.i);
+      if (Number.isFinite(index)) spans.push({ index, start: tr.left, end: tr.right });
+    }
+    const i = pickCenterIndex(spans, r.left + r.width / 2);
+    if (i === null) return;
+    const wasLive = this._isLiveActive();
+    if (!wasLive && i === this._selectedIndex) return;
+    if (wasLive) this._setViewMode("media");
+    this._scrubbing = true;
+    this._selectedIndex = i;
+    this._pendingScrollToI = null;
+    this.requestUpdate();
+  }
+
+  _onScrubSettle() {
+    if (this._scrubDragging) {
+      // Wheel scrub ended: snap back on, the browser centres the nearest thumb.
+      this._scrubDragging = false;
+      this.renderRoot?.querySelector(".tthumbs")?.classList.remove("dragging");
+    }
+    this._scrubbing = false;
+    this.requestUpdate();
+  }
+
+  /** What the viewer shows while scrubbing: the image the strip already
+   * shows for that thumb (still, poster or small jpg) — never a new
+   * download of a full clip. */
+  _scrubFrameUrl(idx, selectedUrl, selectedIsVideo) {
+    const img = this.renderRoot?.querySelector(`.tthumbs button.tthumb[data-i="${idx}"] img.timg`);
+    if (img && img.complete && img.naturalWidth > 0) return img.currentSrc || img.src;
+    if (!selectedIsVideo && !isGifPath(selectedUrl)) return selectedUrl;
+    return this._posterClient.getPosterUrl(selectedUrl) || "";
+  }
+
   /** Paint the cached GIF still under the full GIF in the main viewer, so a
    * newly selected clip shows its first frame at once instead of an empty
    * frame while the whole file downloads. */
@@ -4831,6 +4968,7 @@ class CameraGalleryCard extends LitElement {
   _onThumbsScroll(e) {
     const el = e.currentTarget;
     if (!el) return;
+    if (this._scrubEnabled() && this._scrubGesture.scrolled()) this._scheduleScrubFollow(el);
 
     const thumbs = el.querySelectorAll(".tthumb");
     if (!thumbs.length) return;
@@ -4898,6 +5036,18 @@ class CameraGalleryCard extends LitElement {
     }
 
     if (!Number.isFinite(delta) || Math.abs(delta) < 0.5) return;
+
+    if (this._scrubEnabled()) {
+      // Wheel/trackpad scrub: snap off while the deltas flow in (a programmatic
+      // scroll under mandatory snap would spring back on small trackpad
+      // deltas); the gesture's settle turns it back on.
+      this._scrubGesture.wheel();
+      if (!this._scrubDragging) {
+        this._scrubDragging = true;
+        el.classList.add("dragging");
+        this.requestUpdate();
+      }
+    }
 
     e.preventDefault();
     e.stopPropagation();
@@ -5366,6 +5516,7 @@ class CameraGalleryCard extends LitElement {
     const showPreviewSection = previewOpenFinal;
     const useDatePicker = showTypeFilter && navigator.maxTouchPoints > 0;
     const isVerticalThumbs = this._isThumbLayoutVertical();
+    const scrubOn = this._scrubEnabled();
 
     // Gallery chrome (top toolbar, filter chips, thumbs strip) renders when
     // it's actually useful:
@@ -5556,6 +5707,13 @@ class CameraGalleryCard extends LitElement {
               ? this._renderLiveInner()
               : noResultsForFilter
                 ? html`<div class="preview-empty">No media for this day.</div>`
+                : this._scrubbing
+                  ? (() => {
+                      const frame = this._scrubFrameUrl(idx, selectedUrl, selectedIsVideo);
+                      return frame
+                        ? html`<img class="pimg scrub-frame" src=${frame} alt="" />`
+                        : html`<div class="preview-skeleton" aria-hidden="true"></div>`;
+                    })()
                 : !selectedHasUrl
                   ? html`<div class="preview-skeleton" aria-hidden="true"></div>`
                   : selectedIsVideo
@@ -5729,13 +5887,21 @@ class CameraGalleryCard extends LitElement {
           class="tthumbs-wrap ${isVerticalThumbs ? "vertical" : "horizontal"} ${noResultsForFilter ? "empty" : ""}"
         >
           <div class="scroll-time-pill ${this._scrollPillVisible ? "visible" : ""}" aria-hidden="true">${this._scrollPillText}</div>
+          ${scrubOn && thumbs.length ? html`<div class="scrub-playhead" aria-hidden="true"></div>` : html``}
           ${thumbs.length
             ? html`
                 <div
-                  class="tthumbs ${isVerticalThumbs ? "vertical" : "horizontal"}"
+                  class="tthumbs ${isVerticalThumbs ? "vertical" : "horizontal"} ${scrubOn ? "scrub" : ""} ${scrubOn && this._scrubDragging ? "dragging" : ""}"
                   style="--cgc-thumb-gap:${THUMB_GAP}px;"
                   @wheel=${isVerticalThumbs ? null : this._onThumbWheel}
                   @scroll=${(e) => this._onThumbsScroll(e)}
+                  @pointerdown=${scrubOn ? { handleEvent: (e) => this._onScrubPointerDown(e), capture: true } : null}
+                  @pointermove=${scrubOn ? { handleEvent: (e) => this._onScrubPointerMove(e), capture: true } : null}
+                  @pointerup=${scrubOn ? { handleEvent: (e) => this._onScrubPointerUp(e), capture: true } : null}
+                  @pointercancel=${scrubOn ? { handleEvent: (e) => this._onScrubPointerCancel(e), capture: true } : null}
+                  @click=${scrubOn ? { handleEvent: (e) => this._onScrubClickCapture(e), capture: true } : null}
+                  @touchend=${scrubOn ? { handleEvent: () => this._scrubGesture.touchEnd(), passive: true } : null}
+                  @touchcancel=${scrubOn ? { handleEvent: () => this._scrubGesture.touchEnd(), passive: true } : null}
                 >
                   ${thumbs.map((it) => {
                     const isOn = it.i === idx && !isLive;
@@ -6254,7 +6420,7 @@ const CGC_CONFIG_KEY_ORDER = [
   "menu_buttons", "menu_button_style",
   // ─── Thumbnails ───
   "thumb_layout", "thumb_bar_position", "thumb_size", "thumb_sort_order",
-  "thumbnail_frame_pct", "capture_video_thumbnails", "gif_thumbnails",
+  "thumbnail_frame_pct", "capture_video_thumbnails", "gif_thumbnails", "scrub_on_drag",
   // ─── Styling ───
   "aspect_ratio", "bar_position", "bar_opacity", "talkback_opacity",
   "chevron_opacity", "pill_size", "pill_gap", "row_gap", "card_height",
@@ -9486,6 +9652,18 @@ class CameraGalleryCardEditor extends HTMLElement {
             </div>
           </div>
         </div>
+
+        <div class="row">
+          <div class="row-head">
+            <div>
+              <div class="lbl">Drag to scrub</div>
+              <div class="desc">Drag the thumbnail strip and the viewer follows the thumb under the centre line. Clips load when you let go. Tap still selects.</div>
+            </div>
+            <div class="togrow">
+              <label class="cgc-switch"><input type="checkbox" id="scrub-on-drag" ${c.scrub_on_drag === true ? "checked" : ""}><span class="cgc-track"></span></label>
+            </div>
+          </div>
+        </div>
       `;
 
       return `
@@ -12250,6 +12428,10 @@ details summary { user-select: none; }
 
     $("gif-still-thumbnails")?.addEventListener("change", (e) => {
       this._set("gif_thumbnails", e.target.checked ? "still" : "animated");
+    });
+
+    $("scrub-on-drag")?.addEventListener("change", (e) => {
+      this._set("scrub_on_drag", !!e.target.checked);
     });
 
     $("capture-video-thumbnails")?.addEventListener("change", (e) => {
