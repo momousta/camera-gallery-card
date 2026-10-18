@@ -37,6 +37,7 @@ import { collectMediaSamples, scoreSamples } from "./data/path-format-detect";
 import { CombinedSourceClient } from "./data/combined-source";
 import { canDeleteItem, deleteItem } from "./data/delete-service";
 import { PendingPosterCollector, PosterCacheClient } from "./data/poster-cache";
+import { isGifPath } from "./util/gif-frame";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import {
   detectObjectForSrc,
@@ -4729,6 +4730,17 @@ class CameraGalleryCard extends LitElement {
     return cap;
   }
 
+  /** Paint the cached GIF still under the full GIF in the main viewer, so a
+   * newly selected clip shows its first frame at once instead of an empty
+   * frame while the whole file downloads. */
+  _previewStillStyle(src) {
+    if (this.config?.gif_thumbnails === "animated" || !isGifPath(src)) return "";
+    const still = this._posterClient.getPosterUrl(src);
+    if (!still) return "";
+    const fit = this.config?.object_fit === "contain" ? "contain" : "cover";
+    return `background-image:url("${still}");background-size:${fit};background-position:center;background-repeat:no-repeat;`;
+  }
+
   _onPreviewPointerUp(e, listLen) {
     if (this._isLiveActive()) {
       this._swiping = false;
@@ -5166,6 +5178,9 @@ class CameraGalleryCard extends LitElement {
       for (const { url, stableKey } of this._pendingPoster.posters) {
         this._posterClient.enqueue(url, stableKey);
       }
+      for (const url of this._pendingPoster.gifStills) {
+        this._posterClient.enqueueGifStill(url);
+      }
       this._pendingPoster = null;
     }
 
@@ -5545,7 +5560,7 @@ class CameraGalleryCard extends LitElement {
                   ? html`<div class="preview-skeleton" aria-hidden="true"></div>`
                   : selectedIsVideo
                     ? html`<div id="preview-video-host" class="preview-video-host"></div>`
-                    : html`<img class="pimg" src=${selectedUrl} alt="" />`}
+                    : html`<img class="pimg" src=${selectedUrl} alt="" style=${this._previewStillStyle(selected)} />`}
             ${this._hasLiveConfig() ? (() => {
               const liveCropStyle = this._getLiveCropStyle();
               return html`<div id="live-card-host" class="live-card-host${isLive ? '' : ' live-host-hidden'}${liveCropStyle ? ' has-crop' : ''}" style="${liveCropStyle}"></div>${this._renderSnapshotToast()}`;
@@ -5724,6 +5739,7 @@ class CameraGalleryCard extends LitElement {
                 >
                   ${thumbs.map((it) => {
                     const isOn = it.i === idx && !isLive;
+                    const gifStills = this.config?.gif_thumbnails !== "animated";
                     const isSel = this._selectedSet?.has(it.src);
                     const isMs = usingMediaSource && isMediaSourceId(it.src);
                     const clusterMeta = isMs ? this._mediaClient?.getClusterMeta?.(it.src) : null;
@@ -5752,7 +5768,9 @@ class CameraGalleryCard extends LitElement {
 
                     let poster = isVid
                       ? this._posterClient.resolveVideoPoster(it, isMs, thumbUrl, tThumb, this._pendingPoster)
-                      : thumbUrl;
+                      : gifStills && !isMs && isGifPath(thumbUrl)
+                        ? this._posterClient.resolveGifPoster(it, this._pendingPoster)
+                        : thumbUrl;
                     // For unresolved MS images, use the browse_media thumbnail as fallback
                     // so the thumbnail appears immediately while the full URL is still resolving
                     if (!isVid && !poster && isMs && tThumb) {
@@ -6236,7 +6254,7 @@ const CGC_CONFIG_KEY_ORDER = [
   "menu_buttons", "menu_button_style",
   // ─── Thumbnails ───
   "thumb_layout", "thumb_bar_position", "thumb_size", "thumb_sort_order",
-  "thumbnail_frame_pct", "capture_video_thumbnails",
+  "thumbnail_frame_pct", "capture_video_thumbnails", "gif_thumbnails",
   // ─── Styling ───
   "aspect_ratio", "bar_position", "bar_opacity", "talkback_opacity",
   "chevron_opacity", "pill_size", "pill_gap", "row_gap", "card_height",
@@ -9456,6 +9474,18 @@ class CameraGalleryCardEditor extends HTMLElement {
             </div>
           </div>
         </div>
+
+        <div class="row">
+          <div class="row-head">
+            <div>
+              <div class="lbl">Still GIF thumbnails</div>
+              <div class="desc">Show the first frame of each GIF clip (fetched with a small range request and cached). Off loads and animates every GIF in the strip.</div>
+            </div>
+            <div class="togrow">
+              <label class="cgc-switch"><input type="checkbox" id="gif-still-thumbnails" ${c.gif_thumbnails !== "animated" ? "checked" : ""}><span class="cgc-track"></span></label>
+            </div>
+          </div>
+        </div>
       `;
 
       return `
@@ -12216,6 +12246,10 @@ details summary { user-select: none; }
 
     $("cleanmode")?.addEventListener("change", (e) => {
       this._set("clean_mode", !!e.target.checked);
+    });
+
+    $("gif-still-thumbnails")?.addEventListener("change", (e) => {
+      this._set("gif_thumbnails", e.target.checked ? "still" : "animated");
     });
 
     $("capture-video-thumbnails")?.addEventListener("change", (e) => {

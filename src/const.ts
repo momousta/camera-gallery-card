@@ -14,6 +14,7 @@ export const PREVIEW_POSITIONS = ["top", "bottom"] as const;
 export const THUMB_BAR_POSITIONS = ["top", "bottom", "hidden"] as const;
 export const THUMB_LAYOUTS = ["horizontal", "vertical"] as const;
 export const THUMB_SORT_ORDERS = ["newest", "oldest"] as const;
+export const GIF_THUMBNAIL_MODES = ["still", "animated"] as const;
 export const BAR_POSITIONS = ["top", "bottom", "hidden"] as const;
 export const START_MODES = ["gallery", "live"] as const;
 export const OBJECT_FITS = ["cover", "contain"] as const;
@@ -30,6 +31,7 @@ export type PreviewPosition = (typeof PREVIEW_POSITIONS)[number];
 export type ThumbBarPosition = (typeof THUMB_BAR_POSITIONS)[number];
 export type ThumbLayout = (typeof THUMB_LAYOUTS)[number];
 export type ThumbSortOrder = (typeof THUMB_SORT_ORDERS)[number];
+export type GifThumbnailMode = (typeof GIF_THUMBNAIL_MODES)[number];
 export type BarPosition = (typeof BAR_POSITIONS)[number];
 export type StartMode = (typeof START_MODES)[number];
 export type ObjectFit = (typeof OBJECT_FITS)[number];
@@ -150,6 +152,22 @@ export const MAX_POSTER_WIDTH_PX = 320;
  * against IDB footprint; bumped to 0.8+ shows no visible improvement
  * at 320 px wide. Audit A15. */
 export const POSTER_JPEG_QUALITY = 0.6;
+
+// -------- GIF still thumbnails (owner fork, BL-002) --------
+//
+// Sensor-mode GIF clips are 0.15–2 MB each, but their first frame is only
+// 5–20 % of the file (measured on 480 real camera GIFs: first frame ends at
+// 28–160 KB). Thumbnails stream the head of the file with a `Range` request,
+// stop as soon as the first frame is complete, and cache a JPEG still in the
+// poster mirror (IndexedDB), so repeat visits cost no network at all.
+/** Range cap: give up (and fall back to the full GIF) past this many bytes. */
+export const GIF_STILL_MAX_BYTES = 1024 * 1024;
+/** Longest a GIF still waits for the IndexedDB prewarm before fetching. */
+export const GIF_STILL_PREWARM_WAIT_MS = 150;
+/** Still width cap. Camera GIFs are ≤ 400 px wide, so this keeps them at
+ * native resolution (a 140 px thumb on a DPR 2.6 phone is 364 px). */
+export const GIF_STILL_MAX_WIDTH_PX = 480;
+export const GIF_STILL_JPEG_QUALITY = 0.75;
 
 // -------- WebRTC two-way audio (mic) --------
 //
@@ -323,6 +341,9 @@ export const DEFAULT_THUMB_BAR_POSITION = "bottom" satisfies ThumbBarPosition;
 export const DEFAULT_THUMB_LAYOUT = "horizontal" satisfies ThumbLayout;
 export const DEFAULT_THUMB_SORT_ORDER = "newest" satisfies ThumbSortOrder;
 export const DEFAULT_THUMBNAIL_FRAME_PCT = 0; // 0% = first frame, 100% = last frame
+/** Sensor GIF thumbnails: `still` = cached first frame (fast, owner fork
+ * default), `animated` = the whole GIF in the tile (upstream v3.1.0). */
+export const DEFAULT_GIF_THUMBNAILS = "still" satisfies GifThumbnailMode;
 export const DEFAULT_VISIBLE_OBJECT_FILTERS: readonly ObjectFilter[] = [];
 
 // -------- Inline-style fallbacks (used by render(), not styles.ts) --------

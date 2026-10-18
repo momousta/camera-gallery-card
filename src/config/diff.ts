@@ -48,6 +48,7 @@ const UI_ONLY_KEYS = new Set<ConfigKey>([
   "bar_opacity",
   "bar_position",
   "capture_video_thumbnails",
+  "gif_thumbnails",
   "live_camera_entities",
   "live_cameras",
   "live_enabled",

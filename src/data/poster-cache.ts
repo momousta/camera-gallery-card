@@ -26,6 +26,10 @@
  */
 
 import {
+  GIF_STILL_JPEG_QUALITY,
+  GIF_STILL_PREWARM_WAIT_MS,
+  GIF_STILL_MAX_BYTES,
+  GIF_STILL_MAX_WIDTH_PX,
   MAX_POSTER_WIDTH_PX,
   POSTER_CAPTURE_TIMEOUT_MS,
   POSTER_FETCH_TIMEOUT_MS,
@@ -42,6 +46,7 @@ import type { CameraGalleryCardConfig } from "../config/normalize";
 import type { CardItem } from "../types/media-item";
 import type { HomeAssistant } from "../types/hass";
 import { fnv1aHash } from "../util/hash";
+import { firstFrameGif } from "../util/gif-frame";
 import { posterStore as defaultPosterStore, type PosterStore } from "../util/poster-store";
 import { isVideo } from "../util/media-type";
 import { isReolinkRoot } from "./reolink-engine";
@@ -94,7 +99,12 @@ export function classifyCaptureError(err: unknown): { hard: boolean } {
     return { hard: true };
   }
   const msg = typeof e.message === "string" ? e.message : "";
-  if (msg === "blank frame" || msg === "toBlob returned null" || msg === "no video dimensions") {
+  if (
+    msg === "blank frame" ||
+    msg === "toBlob returned null" ||
+    msg === "no video dimensions" ||
+    msg === "gif first frame not found"
+  ) {
     return { hard: true };
   }
   return { hard: false };
@@ -123,6 +133,13 @@ export interface BlobUrlFactory {
   create(blob: Blob): string | null;
   revoke(url: string): void;
 }
+
+/**
+ * Re-encode a single-frame GIF as a compact JPEG still. Returns `null` when
+ * the runtime can't decode/encode (the caller then keeps the GIF frame).
+ * Injectable so the spec runs without a DOM canvas.
+ */
+export type StillEncoder = (gifFrame: Blob) => Promise<Blob | null>;
 
 /**
  * Read-only view of the surrounding card state the resolver needs.
@@ -169,6 +186,8 @@ export interface PosterCacheClientOptions {
   };
   /** Injectable fetch for protected-asset specs. Defaults to global `fetch`. */
   fetchFn?: typeof fetch;
+  /** Injectable GIF-still re-encoder. Defaults to {@link browserStillEncoder}. */
+  encodeStill?: StillEncoder;
 }
 
 /**
@@ -179,6 +198,8 @@ export interface PosterCacheClientOptions {
 export class PendingPosterCollector {
   /** `(displayUrl, stableKey?)` pairs that need enqueueing. */
   readonly posters: Array<{ url: string; stableKey?: string }> = [];
+  /** Sensor GIF URLs that need a first-frame still. */
+  readonly gifStills: string[] = [];
   /** Media-source IDs that need URL resolution before render can use them. */
   readonly resolveIds: Set<string> = new Set();
 
@@ -187,13 +208,18 @@ export class PendingPosterCollector {
     this.posters.push(stableKey === undefined ? { url } : { url, stableKey });
   }
 
+  addGifStill(url: string): void {
+    if (!url) return;
+    this.gifStills.push(url);
+  }
+
   addResolveId(id: string): void {
     if (!id) return;
     this.resolveIds.add(id);
   }
 
   get size(): number {
-    return this.posters.length + this.resolveIds.size;
+    return this.posters.length + this.gifStills.length + this.resolveIds.size;
   }
 }
 
@@ -234,6 +260,40 @@ export const browserBlobUrlFactory: BlobUrlFactory = {
       /* noop — already revoked or runtime stubbed it out */
     }
   },
+};
+
+/** Production GIF-still encoder: decode the single frame, JPEG-encode it at
+ * ≤ {@link GIF_STILL_MAX_WIDTH_PX}. Any failure returns `null`. */
+export const browserStillEncoder: StillEncoder = async (gifFrame) => {
+  try {
+    if (typeof createImageBitmap !== "function") return null;
+    const bmp = await createImageBitmap(gifFrame);
+    try {
+      const scale = Math.min(1, GIF_STILL_MAX_WIDTH_PX / Math.max(1, bmp.width));
+      const w = Math.max(1, Math.round(bmp.width * scale));
+      const h = Math.max(1, Math.round(bmp.height * scale));
+      if (typeof OffscreenCanvas !== "undefined") {
+        const c = new OffscreenCanvas(w, h);
+        const ctx = c.getContext("2d");
+        if (!ctx) return null;
+        ctx.drawImage(bmp, 0, 0, w, h);
+        return await c.convertToBlob({ type: "image/jpeg", quality: GIF_STILL_JPEG_QUALITY });
+      }
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(bmp, 0, 0, w, h);
+      return await new Promise<Blob | null>((resolve) =>
+        c.toBlob((b) => resolve(b), "image/jpeg", GIF_STILL_JPEG_QUALITY)
+      );
+    } finally {
+      bmp.close?.();
+    }
+  } catch {
+    return null;
+  }
 };
 
 /**
@@ -430,6 +490,10 @@ export class PosterCacheClient {
   private readonly _setTimeout: (fn: () => void, ms: number) => unknown;
   private readonly _clearTimeout: (h: unknown) => void;
   private readonly _fetch: typeof fetch;
+  private readonly _encodeStill: StillEncoder;
+  /** URLs whose queued job is a GIF first-frame still (not a video capture
+   * or a plain image fetch). */
+  private readonly _gifStillJobs: Set<string> = new Set();
 
   private _hass: HomeAssistant | null = null;
 
@@ -473,6 +537,7 @@ export class PosterCacheClient {
       opts.schedule?.clearTimeout ??
       ((h): void => clearTimeout(h as ReturnType<typeof setTimeout>));
     this._fetch = opts.fetchFn ?? ((...args): Promise<Response> => fetch(...args));
+    this._encodeStill = opts.encodeStill ?? browserStillEncoder;
   }
 
   // ─── Lifecycle ────────────────────────────────────────────────────────
@@ -496,6 +561,7 @@ export class PosterCacheClient {
     this._posterPending.clear();
     this._posterAttempts.clear();
     this._posterStableKeys.clear();
+    this._gifStillJobs.clear();
     if (this._softRetryTimer !== null) {
       this._clearTimeout(this._softRetryTimer);
       this._softRetryTimer = null;
@@ -546,6 +612,7 @@ export class PosterCacheClient {
     this._posterPending.clear();
     this._posterAttempts.clear();
     this._posterStableKeys.clear();
+    this._gifStillJobs.clear();
     if (this._softRetryTimer !== null) {
       this._clearTimeout(this._softRetryTimer);
       this._softRetryTimer = null;
@@ -671,7 +738,10 @@ export class PosterCacheClient {
     // opposite of intent, *and* left stale Set entries).
     while (this._posterQueue.length > SENSOR_POSTER_QUEUE_LIMIT) {
       const evicted = this._posterQueue.shift();
-      if (evicted !== undefined) this._posterQueued.delete(evicted);
+      if (evicted !== undefined) {
+        this._posterQueued.delete(evicted);
+        this._gifStillJobs.delete(evicted);
+      }
     }
 
     this._drain();
@@ -680,6 +750,44 @@ export class PosterCacheClient {
   /** Drain the queue up to `SENSOR_POSTER_CONCURRENCY` in-flight captures. */
   drain(): void {
     this._drain();
+  }
+
+  /**
+   * Enqueue a first-frame still for a sensor GIF thumbnail. Same queue,
+   * concurrency cap, failure ledger and IDB mirror as video posters.
+   */
+  enqueueGifStill(src: string): void {
+    const key = String(src ?? "").trim();
+    if (!key) return;
+    this._gifStillJobs.add(key);
+    this.enqueue(key);
+    if (
+      !this._posterQueued.has(key) &&
+      !this._posterInFlight.has(key) &&
+      !this._posterPending.has(key)
+    ) {
+      this._gifStillJobs.delete(key);
+    }
+  }
+
+  /**
+   * Thumbnail URL for a sensor-mode GIF when GIF stills are on: the cached
+   * still, or `""` while it's being made (render shows the skeleton). Any
+   * recorded failure falls back to the GIF itself — exactly the v3.1.0
+   * behaviour — so a thumb never ends up worse than before.
+   */
+  resolveGifPoster(it: CardItem, pending: PendingPosterCollector): string {
+    const src = it.src;
+    const cached = this._posterCache.get(src);
+    if (cached) return cached;
+    const mirrored = this._lsThumbGet(src);
+    if (mirrored) {
+      this._posterCache.set(src, mirrored);
+      return mirrored;
+    }
+    if (this._posterAttempts.has(src)) return src;
+    if (this._inputs.isRevealed(src)) pending.addGifStill(src);
+    return "";
   }
 
   private _drain(): void {
@@ -702,6 +810,7 @@ export class PosterCacheClient {
         })
         .finally((): void => {
           this._posterInFlight.delete(src);
+          this._gifStillJobs.delete(src);
           this._drain();
         });
     }
@@ -1001,15 +1110,28 @@ export class PosterCacheClient {
     if (this.isCoolingDown(src)) return;
 
     const stableKey = this._posterStableKeys.get(src) ?? src;
+    const isGifStill = this._gifStillJobs.has(src);
     const ac = new AbortController();
     this._ensureAborts.set(src, ac);
 
     // Wait for the IDB prewarm to land before checking cache. Cold-load
     // renders schedule captures before `posterStore.readAll()` resolves;
     // without this await we'd race the network and re-download blobs
-    // already on disk.
+    // already on disk. A GIF still is cheap to fetch again, so it waits
+    // at most GIF_STILL_PREWARM_WAIT_MS (opening an empty IDB on a first
+    // visit must not delay the first thumbnails).
     if (this._prewarmReadyPromise && !this._prewarmDone) {
-      await this._prewarmReadyPromise;
+      if (isGifStill) {
+        await new Promise<void>((resolve) => {
+          const h = this._setTimeout(resolve, GIF_STILL_PREWARM_WAIT_MS);
+          void this._prewarmReadyPromise?.then(() => {
+            this._clearTimeout(h);
+            resolve();
+          });
+        });
+      } else {
+        await this._prewarmReadyPromise;
+      }
       if (ac.signal.aborted) {
         this._ensureAborts.delete(src);
         return;
@@ -1046,8 +1168,9 @@ export class PosterCacheClient {
     this._posterPending.add(src);
     try {
       const pct = this._inputs.framePct();
-      const blob =
-        src.startsWith("/") && !isVideo(src)
+      const blob = isGifStill
+        ? await this._fetchGifStill(src, ac.signal)
+        : src.startsWith("/") && !isVideo(src)
           ? await this._fetchProtectedAsBlob(src, ac.signal)
           : await this._capture.capture(src, pct, ac.signal);
       if (ac.signal.aborted) return;
@@ -1056,6 +1179,7 @@ export class PosterCacheClient {
         if (objectUrl) {
           this._posterCache.set(src, objectUrl);
           this.clearFailure(src);
+          if (isGifStill) this._compactGifStill(stableKey, blob);
         } else {
           this.recordFailure(src);
         }
@@ -1071,9 +1195,98 @@ export class PosterCacheClient {
     } finally {
       this._posterPending.delete(src);
       this._posterStableKeys.delete(src);
+      this._gifStillJobs.delete(src);
       this._ensureAborts.delete(src);
       this._onChange?.();
     }
+  }
+
+  /**
+   * Stream the head of a GIF (`Range: bytes=0-…`, capped at
+   * {@link GIF_STILL_MAX_BYTES}), stop reading as soon as the first frame is
+   * complete, and return that frame as a compact still. Aborting early means
+   * the tile costs about one frame of bytes and shows up as fast as the
+   * browser's own progressive GIF rendering would — without the rest of the
+   * file competing for the connection. A server that ignores `Range` (200)
+   * works the same way. Throws `{status: 404}` for a missing file and
+   * `"gif first frame not found"` (hard) when no frame is found in budget.
+   */
+  private async _fetchGifStill(src: string, signal: AbortSignal): Promise<Blob> {
+    const isAbsolute = src.startsWith("http://") || src.startsWith("https://");
+    const url = isAbsolute ? src : this._inputs.getOrigin() + src;
+    const token = this._inputs.getAuthToken();
+    const needsAuth = !isAbsolute && src.startsWith("/api/") && !/[?&]authSig=/.test(src);
+    const headers: Record<string, string> = { Range: `bytes=0-${GIF_STILL_MAX_BYTES - 1}` };
+    if (needsAuth && token) headers["Authorization"] = `Bearer ${token}`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), POSTER_FETCH_TIMEOUT_MS);
+    const onOuterAbort = (): void => ctrl.abort();
+    signal.addEventListener("abort", onOuterAbort, { once: true });
+    let frame: Uint8Array | null = null;
+    try {
+      const res = await this._fetch(url, { headers, signal: ctrl.signal });
+      if (res.status === 404) {
+        const err = new Error("not found") as Error & { status: number };
+        err.status = 404;
+        throw err;
+      }
+      if (!res.ok) throw new Error(`gif head http ${res.status}`);
+      const reader = res.body?.getReader?.();
+      if (reader) {
+        let buf = new Uint8Array(256 * 1024);
+        let len = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (len + value.length > buf.length) {
+            const grown = new Uint8Array(Math.max(buf.length * 2, len + value.length));
+            grown.set(buf.subarray(0, len));
+            buf = grown;
+          }
+          buf.set(value, len);
+          len += value.length;
+          frame = firstFrameGif(buf.subarray(0, len));
+          if (frame || len >= GIF_STILL_MAX_BYTES) break;
+        }
+        // Don't download the rest of the clip.
+        reader.cancel().catch((): void => {});
+      } else {
+        frame = firstFrameGif(
+          new Uint8Array(await res.arrayBuffer()).subarray(0, GIF_STILL_MAX_BYTES)
+        );
+      }
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onOuterAbort);
+      ctrl.abort();
+    }
+    if (!frame) throw new Error("gif first frame not found");
+    return new Blob([frame as BlobPart], { type: "image/gif" });
+  }
+
+  /**
+   * The tile shows the single-frame GIF right away; once the page is idle the
+   * frame is re-encoded as a smaller JPEG for the IndexedDB copy (what later
+   * visits load). The on-screen object URL is left alone.
+   */
+  private _compactGifStill(stableKey: string, gif: Blob): void {
+    const run = (): void => {
+      void this._encodeStill(gif)
+        .then((jpeg): void => {
+          if (!jpeg || jpeg.size >= gif.size) return;
+          const key = this._lsKey(stableKey);
+          const entry = this._posterMirror.get(key);
+          if (!entry || entry.blob !== gif) return; // replaced or evicted meanwhile
+          entry.blob = jpeg;
+          void this._store.set(key, jpeg).catch((): void => {});
+        })
+        .catch((): void => {});
+    };
+    const ric = (
+      globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => unknown }
+    ).requestIdleCallback;
+    if (typeof ric === "function") ric(run, { timeout: 2000 });
+    else this._setTimeout(run, 0);
   }
 
   private _abortAllInFlight(): void {

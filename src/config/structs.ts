@@ -66,6 +66,7 @@ import {
   DEFAULT_THUMB_LAYOUT,
   DEFAULT_THUMB_SORT_ORDER,
   DEFAULT_THUMBNAIL_FRAME_PCT,
+  DEFAULT_GIF_THUMBNAILS,
   DEFAULT_LIVE_LAYOUT,
   LIVE_LAYOUTS,
   MIC_MODES,
@@ -92,6 +93,7 @@ import {
   THUMB_BAR_POSITIONS,
   THUMB_LAYOUTS,
   THUMB_SORT_ORDERS,
+  GIF_THUMBNAIL_MODES,
   THUMB_SIZE,
   THUMB_SIZE_MAX,
   THUMB_SIZE_MIN,
@@ -499,6 +501,9 @@ export const cameraGalleryCardConfigStruct = type({
   // icon. Useful on slow / metered connections where pulling MB-scale
   // mp4 files just for one frame isn't worth the bandwidth.
   capture_video_thumbnails: defaulted(boolean(), true),
+  // Sensor-mode GIF thumbnails: `still` shows a cached first frame fetched
+  // with a small Range request; `animated` loads the whole GIF per tile.
+  gif_thumbnails: defaulted(enums(GIF_THUMBNAIL_MODES), DEFAULT_GIF_THUMBNAILS),
   pill_size: defaulted(intInRange(PILL_SIZE_MIN, PILL_SIZE_MAX), PILL_SIZE_DEFAULT),
   row_gap: defaulted(intInRange(ROW_GAP_MIN, ROW_GAP_MAX), ROW_GAP_DEFAULT),
   card_height: defaulted(intInRange(CARD_HEIGHT_MIN, CARD_HEIGHT_MAX), CARD_HEIGHT_DEFAULT),
