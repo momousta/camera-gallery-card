@@ -1715,6 +1715,12 @@ export const cardStyles = css`
     }
   }
 
+  /* Owner fork: strip items outside the window (see THUMB_WINDOW) are empty
+   * boxes with the tile's size and snap point; static, no handlers. */
+  .tthumb-ph {
+    pointer-events: none;
+  }
+
   .timg {
     width: 100%;
     height: 100%;

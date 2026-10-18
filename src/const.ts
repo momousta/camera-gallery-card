@@ -56,6 +56,24 @@ export const THUMBS_ENABLED = true;
 export const THUMB_GAP = 2;
 export const THUMB_RADIUS = 10;
 export const THUMB_SIZE = 86;
+/**
+ * Thumbnail strip window (owner fork). Only the tiles around the visible
+ * part of the strip are real tiles; every other item of the day is an empty
+ * box of the same size, so the strip keeps its full length (flings and
+ * scroll snap reach every tile) while render cost stays the same for 20 or
+ * 300 items a day. Real tiles cover the visible strip plus
+ * THUMB_WINDOW_SCREENS strip-lengths on each side, in whole blocks of
+ * THUMB_WINDOW (also the first paint). When more than THUMB_WINDOW_MAX tiles
+ * would be real, the blocks farthest from view go back to boxes. A jump to a
+ * tile (viewer swipe, fullscreen nav, tap) makes it and THUMB_WINDOW_AHEAD
+ * tiles on each side real.
+ */
+export const THUMB_WINDOW = 24;
+export const THUMB_WINDOW_MAX = 72;
+export const THUMB_WINDOW_AHEAD = 12;
+export const THUMB_WINDOW_SCREENS = 2;
+/** A strip that scrolled past the whole window fills in this long after its last scroll event. */
+export const THUMB_WINDOW_SETTLE_MS = 120;
 
 // -------- Numeric clamp ranges (used by both the struct and the editor sliders) --------
 // Why these specific ranges:

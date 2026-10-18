@@ -3,6 +3,7 @@
  */
 
 import { LitElement, html } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import jsYaml from "js-yaml";
 
 import { cardStyles } from "./styles";
@@ -132,6 +133,11 @@ import {
   THUMB_SWIPE_MAX,
   THUMB_RADIUS,
   THUMB_SIZE,
+  THUMB_WINDOW,
+  THUMB_WINDOW_AHEAD,
+  THUMB_WINDOW_MAX,
+  THUMB_WINDOW_SCREENS,
+  THUMB_WINDOW_SETTLE_MS,
   THUMBS_ENABLED,
 } from "./const";
 
@@ -761,7 +767,14 @@ class CameraGalleryCard extends LitElement {
     this._expandedClusters = new Set();
     this._thumbObserver = null;
     this._thumbObserverRoot = null;
-    this._observedThumbs = new WeakSet();
+    this._observedThumbs = new Set();
+    // Strip window: items [start, end) are real tiles (see THUMB_WINDOW).
+    this._thumbWinStart = 0;
+    this._thumbWinEnd = THUMB_WINDOW;
+    this._thumbWindowRaf = 0;
+    this._thumbWindowSettle = 0;
+    this._thumbWindowOutranAt = 0;
+    this._thumbsScrolledAt = -Infinity;
 
     // Poster pipeline lives in its own client. Inputs are closures over the
     // sensor/media clients + config so the poster module never imports them
@@ -834,6 +847,9 @@ class CameraGalleryCard extends LitElement {
     // in `set hass` then catches it. Covers disconnect→reconnect cycles where
     // _hass stays set but the previous subscription was torn down.
     this._subscribeFrigateEvents();
+    // HA re-attaches cached views without re-rendering: re-arm the strip's
+    // reveal observer that disconnectedCallback tore down.
+    if (this.hasUpdated) this._setupThumbObserver();
   }
 
   disconnectedCallback() {
@@ -886,6 +902,13 @@ class CameraGalleryCard extends LitElement {
       this._thumbObserver.disconnect();
       this._thumbObserver = null;
     }
+    // Observe every tile again after a reconnect, not just new ones.
+    this._thumbObserverRoot = null;
+    this._observedThumbs = new Set();
+    if (this._thumbWindowRaf) cancelAnimationFrame(this._thumbWindowRaf);
+    this._thumbWindowRaf = 0;
+    clearTimeout(this._thumbWindowSettle);
+    this._thumbWindowOutranAt = 0;
 
     if (this._posterRenderRaf) cancelAnimationFrame(this._posterRenderRaf);
     this._posterRenderRaf = 0;
@@ -1310,11 +1333,11 @@ class CameraGalleryCard extends LitElement {
   _scheduleVisibleMediaWork(selected, filtered, idx, usingMediaSource) {
     const selectedSrc = String(selected || "");
     const cap = (this.config?.max_media ?? DEFAULT_MAX_MEDIA);
-    const thumbRenderLimit = this._getThumbRenderLimit(cap, usingMediaSource);
+    const [thumbLo, thumbHi] = this._getThumbRenderRange(Math.min(cap, filtered.length));
 
     const visibleThumbIds = usingMediaSource
       ? filtered
-          .slice(0, thumbRenderLimit)
+          .slice(thumbLo, thumbHi)
           .map((x) => String(x?.src || ""))
           .filter((src) => src && isMediaSourceId(src))
       : [];
@@ -4402,7 +4425,7 @@ class CameraGalleryCard extends LitElement {
 
       // Herstart observer na scroll reset zodat zichtbare elementen
       // correct worden gedetecteerd op de nieuwe scroll positie
-      this._observedThumbs = new WeakSet();
+      this._observedThumbs = new Set();
       this._setupThumbObserver();
     });
   }
@@ -4418,7 +4441,8 @@ class CameraGalleryCard extends LitElement {
       const wrap = this.renderRoot?.querySelector(".tthumbs");
       if (!wrap) return;
 
-      const btn = wrap.querySelector(`button.tthumb[data-i="${filteredIndexI}"]`);
+      // A placeholder works too: it has the tile's size and position.
+      const btn = wrap.querySelector(`.tthumb[data-i="${filteredIndexI}"]`);
       if (!btn) return;
 
       if (this._isThumbLayoutVertical()) {
@@ -4813,8 +4837,125 @@ class CameraGalleryCard extends LitElement {
     } catch (_) {}
   }
 
-  _getThumbRenderLimit(cap, usingMediaSource) {
-    return cap;
+  /** Items [lo, hi) of the strip's `total` that render as real tiles. */
+  _getThumbRenderRange(total) {
+    const lo = Math.max(0, Math.min(this._thumbWinStart, total - THUMB_WINDOW));
+    const hi = Math.min(total, Math.max(this._thumbWinEnd, lo + THUMB_WINDOW));
+    return [lo, hi];
+  }
+
+  willUpdate(changedProps) {
+    super.willUpdate(changedProps);
+    // Same triggers as the strip scroll reset in updated(): a new day or
+    // filter starts the strip over at the newest tile.
+    if (
+      this._forceThumbReset ||
+      changedProps.has("_selectedDay") ||
+      changedProps.has("_objectFilters")
+    ) {
+      this._thumbWinStart = 0;
+      this._thumbWinEnd = THUMB_WINDOW;
+    } else if (this._pendingScrollToI != null) {
+      // updated() scrolls this tile into view: render it and its neighbours.
+      const i = Math.max(0, Number(this._pendingScrollToI) || 0);
+      this._extendThumbWindow(Math.max(0, i - THUMB_WINDOW_AHEAD), i + 1 + THUMB_WINDOW_AHEAD);
+    }
+  }
+
+  /** Make items [from, to) real tiles, in whole THUMB_WINDOW blocks. A
+   * window that touches them grows to cover them, then hands the blocks
+   * farthest from them back to placeholders while more than
+   * THUMB_WINDOW_MAX are real; one that doesn't moves there, unless
+   * `canJump` is false. Returns true if the window changed, false if it
+   * already covered them, null for a jump not taken. */
+  _extendThumbWindow(from, to, canJump = true) {
+    if (!(to > from)) return false;
+    const needLo = Math.floor(from / THUMB_WINDOW) * THUMB_WINDOW;
+    const needHi = Math.ceil(to / THUMB_WINDOW) * THUMB_WINDOW;
+    let lo = this._thumbWinStart;
+    let hi = this._thumbWinEnd;
+    if (needLo >= lo && needHi <= hi) return false;
+    const max = Math.max(THUMB_WINDOW_MAX, needHi - needLo);
+    if (needLo > hi || needHi < lo) {
+      if (!canJump) return null;
+      lo = needLo;
+      hi = needHi;
+    } else if (needHi > hi) {
+      hi = needHi;
+      lo = Math.max(Math.min(lo, needLo), hi - max);
+    } else {
+      lo = needLo;
+      hi = Math.min(hi, lo + max);
+    }
+    this._thumbWinStart = lo;
+    this._thumbWinEnd = hi;
+    return true;
+  }
+
+  /** Keep real tiles over the visible strip plus THUMB_WINDOW_SCREENS
+   * strip-lengths on each side. Runs on every strip scroll and after
+   * renders (first paint on a wide strip, a hidden card becoming visible);
+   * a no-op while those tiles are already real. While the strip scrolls,
+   * the window follows step by step; a strip that outran it (a hard fling,
+   * a long smooth scroll back to the newest tile) is filled once it settles
+   * (THUMB_WINDOW_SETTLE_MS without scrolling, at most twice that), instead
+   * of building every screen it passes. */
+  _coverThumbWindow(strip) {
+    if (!strip?.isConnected) return;
+    const tiles = strip.children;
+    const n = tiles.length;
+    if (!n) return;
+    const vertical = this._isThumbLayoutVertical();
+    const r = strip.getBoundingClientRect();
+    const size = vertical ? r.height : r.width;
+    if (!size) return; // not laid out (hidden)
+    const margin = size * THUMB_WINDOW_SCREENS;
+    const from = (vertical ? r.top : r.left) - margin;
+    const to = (vertical ? r.bottom : r.right) + margin;
+    const box = (k) => tiles[k].getBoundingClientRect();
+    // Tiles are laid out in index order: binary-search the first one that
+    // ends after `from` and the first one that starts at or after `to`.
+    let lo = 0;
+    let hi = n;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      const b = box(m);
+      if ((vertical ? b.bottom : b.right) > from) hi = m;
+      else lo = m + 1;
+    }
+    const first = lo;
+    hi = n;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      const b = box(m);
+      if ((vertical ? b.top : b.left) >= to) hi = m;
+      else lo = m + 1;
+    }
+    if (lo <= first) return;
+    const needFrom = Number(tiles[first].dataset.i);
+    const needTo = Number(tiles[lo - 1].dataset.i) + 1;
+    if (!Number.isFinite(needFrom) || !Number.isFinite(needTo)) return;
+    const now = performance.now();
+    const scrolling = now - this._thumbsScrolledAt < THUMB_WINDOW_SETTLE_MS;
+    const outran = this._thumbWindowOutranAt;
+    const canJump = !scrolling || (outran > 0 && now - outran >= 2 * THUMB_WINDOW_SETTLE_MS);
+    const changed = this._extendThumbWindow(needFrom, needTo, canJump);
+    clearTimeout(this._thumbWindowSettle);
+    if (changed === null) {
+      if (!outran) this._thumbWindowOutranAt = now;
+      this._thumbWindowSettle = setTimeout(() => this._coverThumbWindow(strip), THUMB_WINDOW_SETTLE_MS);
+      return;
+    }
+    this._thumbWindowOutranAt = 0;
+    if (changed) this.requestUpdate();
+  }
+
+  _scheduleCoverThumbWindow() {
+    if (this._thumbWindowRaf) return;
+    this._thumbWindowRaf = requestAnimationFrame(() => {
+      this._thumbWindowRaf = 0;
+      this._coverThumbWindow(this.shadowRoot?.querySelector(".tthumbs"));
+    });
   }
 
   // ─── Drag-to-scrub (#152) ─────────────────────────────────────────
@@ -5033,6 +5174,8 @@ class CameraGalleryCard extends LitElement {
   _onThumbsScroll(e) {
     const el = e.currentTarget;
     if (!el) return;
+    this._thumbsScrolledAt = performance.now();
+    this._coverThumbWindow(el);
     if (this._scrubEnabled() && this._scrubGesture.scrolled()) this._scheduleScrubFollow(el);
 
     const thumbs = el.querySelectorAll(".tthumb");
@@ -5231,6 +5374,8 @@ class CameraGalleryCard extends LitElement {
       this._closeThumbMenu();
       this._forceThumbReset = false;
       this._pendingScrollToI = 0;
+      this._thumbWinStart = 0;
+      this._thumbWinEnd = THUMB_WINDOW;
       this._previewOpen = !this.config.clean_mode;
       this._selectMode = false;
       this._selectedIndex = 0;
@@ -5293,7 +5438,7 @@ class CameraGalleryCard extends LitElement {
         this._thumbObserver.disconnect();
         this._thumbObserver = null;
         this._thumbObserverRoot = null;
-        this._observedThumbs = new WeakSet();
+        this._observedThumbs = new Set();
       }
     } else if (this._pendingScrollToI != null) {
       const i = this._pendingScrollToI;
@@ -5351,7 +5496,7 @@ class CameraGalleryCard extends LitElement {
       // Match the render's view so the resolve queue includes expanded
       // cluster members — otherwise tapping a member sits on a skeleton.
       const filtered = this._injectExpandedClusterMembers(filteredBeforeCluster);
-      const thumbRenderLimit = this._getThumbRenderLimit(cap, usingMediaSource);
+      const [thumbLo, thumbHi] = this._getThumbRenderRange(Math.min(cap, filtered.length));
 
       const idx = filtered.length
         ? Math.min(Math.max(this._selectedIndex ?? 0, 0), filtered.length - 1)
@@ -5362,10 +5507,10 @@ class CameraGalleryCard extends LitElement {
 
       this._scheduleVisibleMediaWork(selected, filtered, idx, usingMediaSource);
 
-      const visibleThumbSlice = filtered.slice(0, thumbRenderLimit);
+      const visibleThumbSlice = filtered.slice(thumbLo, thumbHi);
       const posterWorkSlice = filtered.slice(
-        0,
-        Math.min(filtered.length, thumbRenderLimit + 6)
+        thumbLo,
+        Math.min(filtered.length, thumbHi + 6)
       );
 
       // Skip the per-cycle poster scheduling when nothing observable
@@ -5373,7 +5518,7 @@ class CameraGalleryCard extends LitElement {
       // idempotent, but iterating up to ~50 items per hass push when
       // the slice is the same is wasted CPU. Gate on items rev + the
       // composition keys that drive `_computeBaseList`.
-      const queueKey = `${this._pipeline.rev}|${this._selectedDay}|${this._selectedIndex}`;
+      const queueKey = `${this._pipeline.rev}|${this._selectedDay}|${this._selectedIndex}|${thumbLo}|${thumbHi}`;
       if (queueKey !== this._lastPosterQueueKey) {
         this._lastPosterQueueKey = queueKey;
         this._queueSnapshotResolveForVisibleThumbs(visibleThumbSlice);
@@ -5406,6 +5551,7 @@ class CameraGalleryCard extends LitElement {
     }
 
     this._setupThumbObserver();
+    this._scheduleCoverThumbWindow();
   }
 
   _setupThumbObserver() {
@@ -5416,7 +5562,7 @@ class CameraGalleryCard extends LitElement {
       this._thumbObserver.disconnect();
       this._thumbObserver = null;
       this._thumbObserverRoot = null;
-      this._observedThumbs = new WeakSet();
+      this._observedThumbs = new Set();
     }
 
     if (!this._thumbObserver) {
@@ -5430,6 +5576,9 @@ class CameraGalleryCard extends LitElement {
           const isSensor = this.config?.source_mode === "sensor" || this.config?.source_mode === "combined";
           for (const entry of entries) {
             if (entry.isIntersecting) {
+              // Tiles coming into view (a hidden card shown, a resize) may
+              // need more of the strip real.
+              this._scheduleCoverThumbWindow();
               const key = entry.target.dataset.lazySrc;
               if (key && !this._revealedThumbs.has(key)) {
                 this._revealedThumbs.add(key);
@@ -5460,6 +5609,12 @@ class CameraGalleryCard extends LitElement {
       );
     }
 
+    // Tiles are keyed: the strip window removes them as it moves.
+    for (const el of this._observedThumbs) {
+      if (el.isConnected) continue;
+      this._thumbObserver.unobserve(el);
+      this._observedThumbs.delete(el);
+    }
     scrollEl.querySelectorAll(".tthumb[data-lazy-src]").forEach((el) => {
       if (!this._observedThumbs.has(el)) {
         this._thumbObserver.observe(el);
@@ -5527,12 +5682,22 @@ class CameraGalleryCard extends LitElement {
 
     const selected = filtered.length ? filtered[idx]?.src : "";
 
-    const thumbRenderLimit = this._getThumbRenderLimit(cap, usingMediaSource);
-
-    const thumbs =
-      THUMBS_ENABLED && filtered.length
-        ? filtered.slice(0, thumbRenderLimit).map((it, i) => ({ ...it, i }))
-        : [];
+    // Real tiles for the window, same-size empty boxes for the rest of the
+    // strip (see THUMB_WINDOW). Tiles are keyed by item, so a new item or a
+    // moved window adds and removes tiles instead of re-pointing them.
+    const thumbTotal = THUMBS_ENABLED ? Math.min(cap, filtered.length) : 0;
+    const [thumbLo, thumbHi] = this._getThumbRenderRange(thumbTotal);
+    const thumbKeys = new Map();
+    const thumbs = filtered.slice(thumbLo, thumbHi).map((it, k) => {
+      const n = thumbKeys.get(it.src) ?? 0;
+      thumbKeys.set(it.src, n + 1);
+      return { ...it, i: thumbLo + k, _key: n ? `${it.src}#${n}` : it.src };
+    });
+    const thumbBox = (it, k) => ({ i: k, src: it.src });
+    const thumbsBefore = filtered.slice(0, thumbLo).map(thumbBox);
+    const thumbsAfter = filtered
+      .slice(thumbHi, thumbTotal)
+      .map((it, k) => thumbBox(it, thumbHi + k));
 
     let selectedUrl = selected;
     if (isMediaSourceId(selected)) {
@@ -5591,6 +5756,12 @@ class CameraGalleryCard extends LitElement {
     const useDatePicker = showTypeFilter && navigator.maxTouchPoints > 0;
     const isVerticalThumbs = this._isThumbLayoutVertical();
     const scrubOn = this._scrubEnabled();
+    // One box style for real tiles and placeholders, so they never differ.
+    const thumbBoxStyle = isVerticalThumbs
+      ? `aspect-ratio:${thumbRatio};border-radius:var(--cgc-thumb-radius, ${THUMB_RADIUS}px);`
+      : `width:${this.config.thumb_size}px;aspect-ratio:${thumbRatio};border-radius:var(--cgc-thumb-radius, ${THUMB_RADIUS}px);`;
+    const thumbPlaceholder = (ph) =>
+      html`<div class="tthumb tthumb-ph" data-i="${ph.i}" data-src="${ph.src}" style="${thumbBoxStyle}" aria-hidden="true"></div>`;
 
     // Gallery chrome (top toolbar, filter chips, thumbs strip) renders when
     // it's actually useful:
@@ -5977,7 +6148,8 @@ class CameraGalleryCard extends LitElement {
                   @touchend=${scrubOn ? { handleEvent: () => this._scrubGesture.touchEnd(), passive: true } : null}
                   @touchcancel=${scrubOn ? { handleEvent: () => this._scrubGesture.touchEnd(), passive: true } : null}
                 >
-                  ${thumbs.map((it) => {
+                  ${thumbsBefore.map(thumbPlaceholder)}
+                  ${repeat(thumbs, (it) => it._key, (it) => {
                     const isOn = it.i === idx && !isLive;
                     const gifStills = this.config?.gif_thumbnails !== "animated";
                     const isSel = this._selectedSet?.has(it.src);
@@ -6039,9 +6211,7 @@ class CameraGalleryCard extends LitElement {
 
                     const barPos = this.config?.thumb_bar_position || "bottom";
                     const showBar = barPos !== "hidden" && (!!tBarLeft || !!objIcon);
-                    const thumbStyle = isVerticalThumbs
-                      ? `aspect-ratio:${thumbRatio};border-radius:var(--cgc-thumb-radius, ${THUMB_RADIUS}px);`
-                      : `width:${this.config.thumb_size}px;aspect-ratio:${thumbRatio};border-radius:var(--cgc-thumb-radius, ${THUMB_RADIUS}px);`;
+                    const thumbStyle = thumbBoxStyle;
 
                     return html`
                       <button
@@ -6192,6 +6362,7 @@ class CameraGalleryCard extends LitElement {
                       </button>
                     `;
                   })}
+                  ${thumbsAfter.map(thumbPlaceholder)}
                 </div>
               `
             : noResultsForFilter
