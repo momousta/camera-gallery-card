@@ -76,6 +76,7 @@ export default [
       "eslint.config.js",
       "*.config.{js,mjs,cjs}",
       "scripts/**/*.{js,mjs,cjs}",
+      "deploy/**/*.mjs",
     ],
     languageOptions: {
       globals: {
@@ -84,6 +85,16 @@ export default [
     },
     rules: {
       "no-console": "off",
+    },
+  },
+  {
+    // Owner-fork test loader: a tiny browser module served from /local/dev.
+    files: ["deploy/**/*.js"],
+    languageOptions: {
+      sourceType: "module",
+      globals: {
+        ...globals.browser,
+      },
     },
   },
 ];
