@@ -1936,6 +1936,19 @@ export const cardStyles = css`
     color: gold;
   }
 
+  /* Owner fork: the star is an inline SVG instead of <ha-icon>. On a strip
+   * of hundreds of tiles, ha-icon costs two custom elements and an async
+   * icon lookup per tile, and card-mod re-reads computed styles on every
+   * ha-icon after each update and five more times over the next seconds.
+   * Box and fill match ha-svg-icon. */
+  .fav-icon {
+    display: block;
+    width: 100%;
+    height: 100%;
+    fill: var(--icon-primary-color, currentcolor);
+    pointer-events: none;
+  }
+
   /* Cluster count badge — sits in the bottom-right of a Frigate-cluster
    * representative thumb. Tap toggles inline expansion of the mini-strip
    * of underlying member events. */

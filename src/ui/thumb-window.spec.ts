@@ -389,3 +389,34 @@ describe("thumbnail strip window", () => {
     expect(realRange(card)).toEqual([0, 2 * THUMB_WINDOW]);
   });
 });
+
+describe("thumbnail favourite star", () => {
+  // HA's own mdi:star / mdi:star-outline paths (read from a live <ha-icon>).
+  const STAR =
+    "M12,17.27L18.18,21L16.54,13.97L22,9.24L14.81,8.62L12,2L9.19,8.62L2,9.24L7.45,13.97L5.82,21L12,17.27Z";
+  const STAR_OUTLINE =
+    "M12,15.39L8.24,17.66L9.23,13.38L5.91,10.5L10.29,10.13L12,6.09L13.71,10.13L18.09,10.5L14.77,13.38L15.76,17.66M22,9.24L14.81,8.63L12,2L9.19,8.63L2,9.24L7.45,13.97L5.82,21L12,17.27L18.18,21L16.54,13.97L22,9.24Z";
+
+  it("draws the star as inline SVG, filled for favourites", async () => {
+    const card = await renderGallery(3);
+    const favSrc = makeItems(3)[1]!.src;
+    vi.spyOn(card._favorites, "has").mockImplementation((src: unknown) => src === favSrc);
+    card.requestUpdate();
+    await card.updateComplete;
+    const stars = tiles(card).map((t) => t.querySelector(".fav-btn")!);
+    expect(stars).toHaveLength(3);
+    expect(stars.some((s) => s.querySelector("ha-icon"))).toBe(false);
+    expect(stars.map((s) => s.classList.contains("on"))).toEqual([false, true, false]);
+    expect(stars.map((s) => s.querySelector("svg.fav-icon > path")!.getAttribute("d"))).toEqual([
+      STAR_OUTLINE,
+      STAR,
+      STAR_OUTLINE,
+    ]);
+  });
+
+  it("show_favorite: false hides it", async () => {
+    const card = await renderGallery(3, { show_favorite: false });
+    expect(tiles(card)).toHaveLength(3);
+    expect(card.shadowRoot.querySelector(".fav-btn")).toBeNull();
+  });
+});
