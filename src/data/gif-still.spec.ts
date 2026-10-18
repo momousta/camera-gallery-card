@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CameraGalleryCardConfig } from "../config/normalize";
 import { GIF_STILL_MAX_BYTES, GIF_STILL_PREWARM_WAIT_MS } from "../const";
@@ -282,9 +282,18 @@ describe("GIF stills: fetch + carve + cache", () => {
 });
 
 describe("GIF stills: first visit isn't held up by IndexedDB", () => {
-  it("fetches after at most GIF_STILL_PREWARM_WAIT_MS when the prewarm is slow", async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("doesn't wait for the prewarm before this browser has cached a still", async () => {
     const gif = animatedGif(400, 3);
     const srv = rangeServer({ [SRC]: gif });
+    const sets: Array<[string, string]> = [];
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: (k: string, v: string) => sets.push([k, v]),
+    });
     const slowStore = new FakeStore();
     slowStore.readAll = (): Promise<{ key: string; blob: Blob; ts: number }[]> =>
       new Promise((r) => setTimeout(() => r([]), 5000));
@@ -298,10 +307,34 @@ describe("GIF stills: first visit isn't held up by IndexedDB", () => {
     c.load(cfg);
     void c.prewarm();
     c.enqueueGifStill(SRC);
+    await flush();
+    expect(srv.calls).toHaveLength(1); // no 150 ms wait
+    expect(c.getPosterUrl(SRC)).toBeTruthy();
+    expect(sets).toEqual([["cgc_gif_stills_cached", "1"]]);
+  });
+
+  it("waits briefly for the prewarm once stills are cached (repeat visit)", async () => {
+    const gif = animatedGif(400, 3);
+    const srv = rangeServer({ [SRC]: gif });
+    vi.stubGlobal("localStorage", { getItem: () => "1", setItem: () => {} });
+    const slowStore = new FakeStore();
+    slowStore.readAll = (): Promise<{ key: string; blob: Blob; ts: number }[]> =>
+      new Promise((r) => setTimeout(() => r([]), 5000));
+    const c = new PosterCacheClient({
+      inputs: inputs(),
+      store: slowStore as unknown as PosterStore,
+      blobUrls: blobUrls(),
+      fetchFn: srv.fetchFn,
+      encodeStill: async () => null,
+    });
+    c.load(cfg);
+    void c.prewarm();
+    c.enqueueGifStill(SRC);
+    await flush();
+    expect(srv.calls).toHaveLength(0); // still waiting (≤ GIF_STILL_PREWARM_WAIT_MS)
     await new Promise((r) => setTimeout(r, GIF_STILL_PREWARM_WAIT_MS + 50));
     await flush();
     expect(srv.calls).toHaveLength(1);
-    expect(c.getPosterUrl(SRC)).toBeTruthy();
   });
 });
 

@@ -5442,6 +5442,15 @@ class CameraGalleryCard extends LitElement {
               if (isSensor && key && this._isVideoForSrc(key)) {
                 const pairedJpg = this._sensorClient.getSensorPairedThumbs().get(key);
                 if (pairedJpg) this._posterClient.enqueue(pairedJpg);
+              } else if (
+                isSensor &&
+                key &&
+                this.config?.gif_thumbnails !== "animated" &&
+                isGifPath(key) &&
+                !this._posterClient.getPosterUrl(key)
+              ) {
+                // Start the GIF still now instead of after the next render.
+                this._posterClient.enqueueGifStill(key);
               }
             }
           }

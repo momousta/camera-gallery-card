@@ -51,6 +51,30 @@ import { posterStore as defaultPosterStore, type PosterStore } from "../util/pos
 import { isVideo } from "../util/media-type";
 import { isReolinkRoot } from "./reolink-engine";
 
+// ─── GIF-still warm flag ──────────────────────────────────────────────
+
+/** Set once this browser has stored a GIF still: only then is it worth
+ * waiting for the IndexedDB prewarm before fetching (first visits don't). */
+const MIRROR_WARM_FLAG = "cgc_gif_stills_cached";
+
+function mirrorLikelyWarm(): boolean {
+  try {
+    return (
+      (globalThis as { localStorage?: Storage }).localStorage?.getItem(MIRROR_WARM_FLAG) === "1"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function markMirrorWarm(): void {
+  try {
+    (globalThis as { localStorage?: Storage }).localStorage?.setItem(MIRROR_WARM_FLAG, "1");
+  } catch {
+    /* storage unavailable: the next visit just doesn't wait */
+  }
+}
+
 // ─── Exported pure helpers ────────────────────────────────────────────
 
 /**
@@ -494,6 +518,7 @@ export class PosterCacheClient {
   /** URLs whose queued job is a GIF first-frame still (not a video capture
    * or a plain image fetch). */
   private readonly _gifStillJobs: Set<string> = new Set();
+  private _warmMarked = false;
 
   private _hass: HomeAssistant | null = null;
 
@@ -1117,10 +1142,10 @@ export class PosterCacheClient {
     // Wait for the IDB prewarm to land before checking cache. Cold-load
     // renders schedule captures before `posterStore.readAll()` resolves;
     // without this await we'd race the network and re-download blobs
-    // already on disk. A GIF still is cheap to fetch again, so it waits
-    // at most GIF_STILL_PREWARM_WAIT_MS (opening an empty IDB on a first
-    // visit must not delay the first thumbnails).
-    if (this._prewarmReadyPromise && !this._prewarmDone) {
+    // already on disk. A GIF still is cheap to fetch again: it doesn't wait
+    // at all until this browser has stored one (a first visit must not wait
+    // for an empty IDB to open), then at most GIF_STILL_PREWARM_WAIT_MS.
+    if (this._prewarmReadyPromise && !this._prewarmDone && !(isGifStill && !mirrorLikelyWarm())) {
       if (isGifStill) {
         await new Promise<void>((resolve) => {
           const h = this._setTimeout(resolve, GIF_STILL_PREWARM_WAIT_MS);
@@ -1179,7 +1204,13 @@ export class PosterCacheClient {
         if (objectUrl) {
           this._posterCache.set(src, objectUrl);
           this.clearFailure(src);
-          if (isGifStill) this._compactGifStill(stableKey, blob);
+          if (isGifStill) {
+            this._compactGifStill(stableKey, blob);
+            if (!this._warmMarked) {
+              this._warmMarked = true;
+              markMirrorWarm();
+            }
+          }
         } else {
           this.recordFailure(src);
         }
