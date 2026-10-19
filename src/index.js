@@ -42,6 +42,7 @@ import { isGifPath } from "./util/gif-frame";
 import { pickCenterIndex, ScrubGesture } from "./data/scrub";
 import { sidecarFolder, sidecarUrl } from "./data/sidecar";
 import { planPreload, ThumbPreloader } from "./data/preload";
+import { firstWeekdayFor, monthGrid, monthOf, monthRange, shiftMonth, weekdayLabels } from "./data/calendar";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import {
   detectObjectForSrc,
@@ -448,12 +449,13 @@ class CameraGalleryCard extends LitElement {
     this._scrubClickBlockUntil = 0;
     this._stripScrubPointerId = null; // not _scrubPointerId: that one is the video progress bar's
     this._scrubGesture = new ScrubGesture({ onSettle: () => this._onScrubSettle() });
-    // BL-006: previews next to the files (`thumbnail_folder`) and their preloading.
+    // BL-006: previews next to the files (`thumbnail_folder`), their preloading, the date calendar.
     this._sidecarMissing = new Set();
     this._lastScrubFrame = "";
     this._preloader = null;
     this._preloadKey = "";
     this._preloadTimer = 0;
+    this._datePickerMonth = "";
     this._onPreloadVisibility = () => this._preloader?.pump();
     this._swipeStartX = 0;
     this._swipeStartY = 0;
@@ -1609,6 +1611,7 @@ class CameraGalleryCard extends LitElement {
 
   _openDatePicker(days) {
     this._datePickerDays = days;
+    this._datePickerMonth = monthOf(this._selectedDay || days?.[0] || "");
     this._showDatePicker = true;
     this.requestUpdate();
   }
@@ -1616,6 +1619,7 @@ class CameraGalleryCard extends LitElement {
   _closeDatePicker() {
     this._showDatePicker = false;
     this._datePickerDays = null;
+    this._datePickerMonth = "";
     this.requestUpdate();
   }
 
@@ -3642,55 +3646,66 @@ class CameraGalleryCard extends LitElement {
     `;
   }
 
+  /** BL-006: a month calendar. Days with clips can be picked; the arrows move between months that have some. */
   _renderDatePicker() {
     if (!this._showDatePicker) return html``;
     const days = this._datePickerDays || [];
-
-    const groups = new Map();
-    for (const day of days) {
-      const [y, m] = day.split("-");
-      const key = `${y}-${m}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(day);
-    }
-
-    const selected = this._selectedDay;
+    const have = new Set(days);
+    const range = monthRange(days);
+    const selected = this._selectedDay || days[0] || null;
+    const month = this._datePickerMonth || monthOf(selected || "") || range?.max || "";
+    if (!month) return html``;
+    const locale = this._hass?.locale;
+    const lang = locale?.language;
+    const firstWeekday = firstWeekdayFor(locale?.first_weekday, lang);
+    const today = dayKeyFromMs(Date.now()) || "";
+    const weeks = monthGrid(month, firstWeekday, { hasMedia: (d) => have.has(d), today, selected });
+    const canPrev = !!range && month > range.min;
+    const canNext = !!range && month < range.max;
+    const go = (delta) => {
+      this._datePickerMonth = shiftMonth(month, delta);
+      this.requestUpdate();
+    };
+    const pick = (day) => {
+      this._selectedDay = day;
+      this._selectedIndex = 0;
+      this._pendingScrollToI = null;
+      this._forceThumbReset = true;
+      this._exitSelectMode();
+      if (this.config?.clean_mode) this._previewOpen = false;
+      if (this._isLiveActive()) this._setViewMode("media");
+      this._closeDatePicker();
+    };
+    const title = formatMonth(month, locale);
 
     return html`
       <div class="live-picker-backdrop" @click=${() => this._closeDatePicker()}></div>
-      <div class="live-picker date-picker" @click=${(e) => e.stopPropagation()}>
+      <div class="live-picker date-picker cal-picker" @click=${(e) => e.stopPropagation()}>
         <div class="live-picker-head">
-          <div class="live-picker-title">Select date</div>
+          <button class="cal-nav" ?disabled=${!canPrev} @click=${() => go(-1)} title="Previous month" aria-label="Previous month">
+            <ha-icon icon="mdi:chevron-left"></ha-icon>
+          </button>
+          <div class="live-picker-title cal-title">${title}</div>
+          <button class="cal-nav" ?disabled=${!canNext} @click=${() => go(1)} title="Next month" aria-label="Next month">
+            <ha-icon icon="mdi:chevron-right"></ha-icon>
+          </button>
           <button class="live-picker-close" @click=${() => this._closeDatePicker()} title="Close" aria-label="Close">
             <ha-icon icon="mdi:close"></ha-icon>
           </button>
         </div>
-        <div class="live-picker-list">
-          ${[...groups.entries()].map(([monthKey, monthDays]) => html`
-            <div class="dp-month-header">
-              ${formatMonth(monthKey, this._hass?.locale)}
-            </div>
-            ${monthDays.map((day) => {
-              const isSel = day === selected;
-              return html`
-                <button
-                  class="live-picker-item ${isSel ? "on" : ""}"
-                  @click=${() => {
-                    this._selectedDay = day;
-                    this._selectedIndex = 0;
-                    this._pendingScrollToI = null;
-                    this._forceThumbReset = true;
-                    this._exitSelectMode();
-                    if (this.config?.clean_mode) this._previewOpen = false;
-                    this._closeDatePicker();
-                  }}
-                >
-                  <span class="dp-day-label">${formatDay(day, this._hass?.locale)}</span>
-                  ${isSel ? html`<ha-icon class="live-picker-check" icon="mdi:check"></ha-icon>` : html``}
-                </button>
-              `;
-            })}
-          `)}
+        <div class="cal-grid" role="grid" aria-label=${title}>
+          ${weekdayLabels(firstWeekday, lang).map((w) => html`<div class="cal-wd" aria-hidden="true">${w}</div>`)}
+          ${weeks.flat().map((c) =>
+            c.day
+              ? html`<button
+                  class="cal-day ${c.hasMedia ? "has" : ""} ${c.isSelected ? "on" : ""} ${c.isToday ? "today" : ""}"
+                  ?disabled=${!c.hasMedia}
+                  aria-pressed=${c.isSelected ? "true" : "false"}
+                  aria-label=${formatDay(c.day, locale)}
+                  @click=${() => pick(c.day)}
+                >${c.date}</button>`
+              : html`<div class="cal-blank" aria-hidden="true"></div>`
+          )}
         </div>
       </div>
     `;
@@ -6552,7 +6567,20 @@ class CameraGalleryCard extends LitElement {
                 <button class="iconbtn" ?disabled=${!canPrev} @click=${() => this._stepDay(+1, days, currentForNav)} aria-label="Previous day" title="Previous day">
                   <ha-icon icon="mdi:chevron-left"></ha-icon>
                 </button>
-                <div class="dateinfo" title="Selected day">
+                <div
+                  class="dateinfo datepick"
+                  role="button"
+                  tabindex="0"
+                  title="Pick a date"
+                  @click=${() => this._openDatePicker(days)}
+                  @keydown=${(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      this._openDatePicker(days);
+                    }
+                  }}
+                >
+                  <ha-icon class="cal-ico" icon="mdi:calendar-month-outline"></ha-icon>
                   <span class="txt">${currentForNav ? formatDay(currentForNav, this._hass?.locale) : "—"}</span>
                 </div>
                 <button class="iconbtn" ?disabled=${!canNext} @click=${() => this._stepDay(-1, days, currentForNav)} aria-label="Next day" title="Next day">

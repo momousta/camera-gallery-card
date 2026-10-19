@@ -170,6 +170,7 @@ A few notes on the generic walker:
 - Sensor mode GIF clips: a still first frame by default (`gif_thumbnails: still`). The card fetches only the head of each GIF with an HTTP `Range` request (typically 5–20 % of the file), and caches the still in IndexedDB, so a second visit needs no download at all. `gif_thumbnails: animated` loads and animates the whole GIF in every tile, as before
 - **Drag to scrub** (`scrub_on_drag: true`): press and drag the thumbnail strip; the viewer follows the thumb under the centre line (Ring / iOS Photos style). While you drag, the viewer shows the thumbnail; the clip loads, and a video plays, when you let go. A tap still selects; mouse drag and the mouse wheel scrub too
 - **Previews next to the files** (`thumbnail_folder: thumbs`): the strip and scrubbing use small JPEG previews (10–30 KB) instead of the clips and photos themselves; the full file loads when you stop on it. With `preload_thumbnails: true` the day's previews, then the neighbouring days', load in the background, so scrolling never waits
+- **Calendar**: tap the date to pick a day from a month calendar; days with media are highlighted, the others can't be picked
 - **Paired image + video** — when a snapshot and clip share the same filename stem they're shown as one item, with the image used as the thumbnail
 
 ### Video controls

@@ -167,6 +167,57 @@ describe("previews next to the files (thumbnail_folder)", () => {
   });
 });
 
+describe("calendar date picker", () => {
+  const open = async (card: any) => {
+    (q(card, ".datepill .dateinfo.datepick") as HTMLElement).click();
+    await card.updateComplete;
+    return q(card, ".cal-picker") as HTMLElement;
+  };
+  const dayBtn = (card: any, date: number) =>
+    [...card.shadowRoot.querySelectorAll(".cal-day")].find(
+      (b: any) => b.textContent.trim() === String(date)
+    ) as HTMLButtonElement | undefined;
+
+  it("tapping the date opens the month of the selected day; only days with clips can be picked", async () => {
+    const card = await renderCard({ start_mode: "gallery" });
+    const cal = await open(card);
+    expect(cal).toBeTruthy();
+    expect(q(card, ".cal-title").textContent).toContain("October");
+    expect(q(card, ".cal-title").textContent).toContain("2026");
+    expect([...card.shadowRoot.querySelectorAll(".cal-wd")].map((n: any) => n.textContent)).toEqual([
+      "S", "M", "T", "W", "T", "F", "S",
+    ]); // prettier-ignore
+    expect(dayBtn(card, 19)?.disabled).toBe(false);
+    expect(dayBtn(card, 17)?.disabled).toBe(false);
+    expect(dayBtn(card, 18)?.disabled).toBe(true);
+    expect(dayBtn(card, 19)?.classList.contains("on")).toBe(true);
+  });
+
+  it("picking a day selects it and closes the calendar", async () => {
+    const card = await renderCard({ start_mode: "gallery" });
+    await open(card);
+    dayBtn(card, 17)!.click();
+    await card.updateComplete;
+    expect(card._selectedDay).toBe("2026-10-17");
+    expect(card._selectedIndex).toBe(0);
+    expect(q(card, ".cal-picker")).toBeNull();
+  });
+
+  it("the month arrows only go to months that have clips", async () => {
+    const card = await renderCard({ start_mode: "gallery" });
+    await open(card);
+    const [prev, next] = [...card.shadowRoot.querySelectorAll(".cal-nav")] as HTMLButtonElement[];
+    expect(next!.disabled).toBe(true);
+    expect(prev!.disabled).toBe(false);
+    prev!.click();
+    await card.updateComplete;
+    expect(q(card, ".cal-title").textContent).toContain("September");
+    expect(dayBtn(card, 30)?.disabled).toBe(false);
+    const [prev2] = [...card.shadowRoot.querySelectorAll(".cal-nav")] as HTMLButtonElement[];
+    expect(prev2!.disabled).toBe(true);
+  });
+});
+
 describe("preloading", () => {
   it("queues the active day outward from the selection, then the neighbour days, as previews", async () => {
     const calls: { src: string; url: string }[][] = [];
