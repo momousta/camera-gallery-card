@@ -6,9 +6,10 @@ It lives in `/share/dev/camera-gallery-card` until the owner pushes it to his Gi
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything but don't push").
 
-- **Now:** build `3.1.0-owner.4` since 2026-10-19 13:46 (BACKLOG BL-006), resource
-  `/local/cgc-fork/camera-gallery-card.js?v=514a65062fdf`.
-- **Before:** `3.1.0-owner.3` (`?v=68f5d4fa0b24`), saved in `/share/backups/bl002/owner.3-68f5d4fa0b24/`. To go
+- **Now:** build `3.1.0-owner.5` since 2026-10-19 14:20 (BACKLOG BL-007: the timeline card). Check the resource
+  with `node deploy/ha-deploy.mjs status`.
+- **Before:** `3.1.0-owner.4` (`?v=514a65062fdf`, BL-006), saved in `/share/backups/bl002/owner.4-514a65062fdf/`.
+- **Earlier still:** `3.1.0-owner.3` (`?v=68f5d4fa0b24`), saved in `/share/backups/bl002/owner.3-68f5d4fa0b24/`. To go
   back to it, copy both files into `dist/` and run `switch`.
 - **Earlier:** `3.1.0-owner.2` (`?v=9b81a5001b09`), saved in `/share/backups/bl002/owner.2-9b81a5001b09/`. To go
   back to it, copy both files into `dist/` and run `switch`.
@@ -51,11 +52,20 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
   - Touch scrub: frames are previews (`….gif.jpg`, `….jpg.jpg`); one full load on release; tap and vertical swipe
     unchanged.
   - Calendar: October 2026, days with clips pickable, picking a day selects it. No star.
+- **owner.5 (BL-007, `camera-timeline-card`)**, on the live page `/main-dashboard/timeline` (8 cameras):
+  - Opens on today at now, all previews.
+  - Touch drag from 14:20 back to 11:54, every camera following, 0 full-size downloads.
+  - Play 2 s = +2 min; pause holds.
+  - Calendar to the 11th, which opens on its last moment.
+  - Tapping a camera loads that one full file.
+  - 826 previews (11.9 MB) preloaded for today and the picked day.
+  - 0 page errors.
 - **Not checked:** real phones, iOS Safari, live WebRTC and talkback (WebRTC doesn't run in headless Chromium).
 
 Harness and results: `/share/dev/bl002-work`.
 
-- Scripts: `harness/measure_golive.mjs --script touch3|fast|staricon|count|preload|browsefull|cal`.
+- Scripts: `harness/measure_golive.mjs --script touch3|fast|staricon|count|preload|browsefull|cal|tl` (`tl` with
+  `--tag camera-timeline-card --view timeline [--shot file.png]`).
 - Results: `results/golive-*.jsonl`, `results/star-*.jsonl` and `results/live.jsonl`.
 
 ## What the fork adds on top of v3.1.0
@@ -79,6 +89,10 @@ Harness and results: `/share/dev/bl002-work`.
 | `feat(thumbs): previews next to the files (thumbnail_folder)…` | Server previews (`<dir>/thumbs/<file>.jpg`) for tiles, scrub frames (always), the placeholder under the full file and video posters; `preload_thumbnails`/`preload_days` load the day's previews, then the neighbour days' | BL-006: photos were tiles and scrub frames in full (1–6 MB)                                                       |
 | `feat(date): pick the day from a month calendar`               | Tap the date: month grid, days with media pickable, HA first weekday                                                                                                                                                       | BL-006: owner asked for a calendar                                                                                |
 | `build: fork version 3.1.0-owner.4`                            | Version shown in the bundle banner                                                                                                                                                                                         | The live build                                                                                                    |
+| `refactor(date): one month calendar for both cards`            | The calendar is `src/ui/calendar-picker.js` + its styles                                                                                                                                                                   | Shared with the timeline card                                                                                     |
+| `feat(timeline): camera-timeline-card…`                        | A second element: every camera on one time track (shared moment, previews, play, calendar, full view, preloading)                                                                                                          | BL-007: owner asked for one timeline for all cameras                                                              |
+| `style(timeline): taller activity lanes`                       | 7 px lanes                                                                                                                                                                                                                 | An easier thumb target                                                                                            |
+| `build: fork version 3.1.0-owner.5`                            | Version shown in the bundle banner                                                                                                                                                                                         | The live build                                                                                                    |
 
 ## Build and test
 
