@@ -55,6 +55,8 @@ export const GALLERY_PILL_CATALOG: readonly PillCatalogEntry[] = [
     icon: "mdi:picture-in-picture-bottom-right",
   },
   { id: "fullscreen", label: "Fullscreen", defaultOrder: 50, icon: "mdi:fullscreen" },
+  // BL-008: only shown when `nvr_channel` is set.
+  { id: "nvr", label: "NVR recording (Low / High)", defaultOrder: 55, previewText: "NVR" },
   {
     id: "video_time",
     label: "Time read-out (bottom-right)",

@@ -53,6 +53,8 @@ const UI_ONLY_KEYS = new Set<ConfigKey>([
   "thumbnail_folder",
   "preload_thumbnails",
   "preload_days",
+  "nvr_channel",
+  "nvr_addon",
   "live_camera_entities",
   "live_cameras",
   "live_enabled",

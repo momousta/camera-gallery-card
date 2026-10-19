@@ -135,6 +135,22 @@ export function formatDay(dayKey: string, locale: FrontendLocaleData | undefined
   }
 }
 
+/** BL-008: hh:mm:ss in the user's 12/24 h setting (the NVR player's clock). */
+export function formatClockFromMs(ms: number, locale: FrontendLocaleData | undefined): string {
+  if (!Number.isFinite(ms)) return "";
+  try {
+    const hour12 = useAmPm(locale);
+    return dateTimeFormat(`hms${hour12 ? 12 : 24}`, locale?.language, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12,
+    }).format(new Date(ms));
+  } catch {
+    return "";
+  }
+}
+
 export function formatTimeFromMs(ms: number, locale: FrontendLocaleData | undefined): string {
   if (!Number.isFinite(ms)) return "";
   try {

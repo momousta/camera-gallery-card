@@ -318,3 +318,66 @@ describe("preloading and updates", () => {
     expect(() => card.setConfig({ cameras: ["sensor.x"] })).toThrow(/path_datetime_format/);
   });
 });
+
+describe("NVR recording in the full view (BL-008)", () => {
+  const btnTexts = (card: any) => $$(card, ".tl-overlay .tl-btn").map((b) => b.textContent!.trim());
+  const btn = (card: any, label: string) =>
+    $$(card, ".tl-overlay .tl-btn").find(
+      (b) => b.textContent!.trim() === label
+    ) as HTMLButtonElement;
+
+  it("Low / High play the camera's NVR recording from the moment on the track", async () => {
+    const cams = CONFIG.cameras.map((c, i) => (i === 0 ? { ...c, nvr_channel: 6 } : c));
+    const card = await render({ cameras: cams });
+    card._setT(at(13, 40));
+    await card.updateComplete;
+    $$(card, ".tl-tile")[0]!.click();
+    await card.updateComplete;
+    expect(btnTexts(card)).toEqual(["Low", "High", "Open camera", ""]);
+    btn(card, "High").click();
+    await card.updateComplete;
+    const player = $(card, ".tl-overlay-nvr cgc-nvr-player");
+    expect([player.channel, player.time, player.stream, player.addon]).toEqual([
+      6,
+      at(13, 40),
+      "main",
+      "local_nvr_playback",
+    ]);
+    expect(player.poster).toBe(P("front", "motion_20261019_133000.gif"));
+    expect(player.bare).toBe(true);
+    expect($(card, ".tl-overlay-head")!.textContent!.replace(/\s+/g, " ")).toContain(
+      "Front · NVR from"
+    );
+    expect(btn(card, "High").classList.contains("on")).toBe(true);
+    expect($(card, ".tl-overlay .tl-overlay-media")).toBeNull();
+
+    player.dispatchEvent(
+      new CustomEvent("nvr-stream", { detail: { stream: "sub" }, bubbles: true, composed: true })
+    );
+    await card.updateComplete;
+    expect(btn(card, "Low").classList.contains("on")).toBe(true);
+    player.dispatchEvent(new CustomEvent("nvr-close", { bubbles: true, composed: true }));
+    await card.updateComplete;
+    expect($(card, "cgc-nvr-player")).toBeNull();
+    expect($(card, ".tl-overlay .tl-overlay-media")).not.toBeNull();
+
+    // The lit button switches it off again.
+    btn(card, "Low").click();
+    await card.updateComplete;
+    expect($(card, "cgc-nvr-player")).not.toBeNull();
+    expect(btn(card, "Low").getAttribute("aria-pressed")).toBe("true");
+    btn(card, "Low").click();
+    await card.updateComplete;
+    expect($(card, "cgc-nvr-player")).toBeNull();
+  });
+
+  it("no Low / High for a camera without an nvr_channel", async () => {
+    const card = await render();
+    card._setT(at(13, 40));
+    await card.updateComplete;
+    $$(card, ".tl-tile")[1]!.click();
+    await card.updateComplete;
+    expect(btnTexts(card)).not.toContain("Low");
+    expect(btnTexts(card)).not.toContain("High");
+  });
+});

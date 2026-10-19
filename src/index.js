@@ -47,6 +47,8 @@ import { renderCalendarPicker } from "./ui/calendar-picker";
 import { calendarPickerStyles } from "./ui/calendar-picker-styles";
 // BL-007: the multi-camera timeline card ships in the same bundle (<camera-timeline-card>).
 import "./timeline/timeline-card.js";
+import "./nvr/nvr-player.js";
+import { DEFAULT_NVR_ADDON, nvrChannelOf } from "./nvr/nvr-api";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import { parseUrlActions } from "./data/url-actions";
 import { indexOfTarget, parseUrlTarget, pickTargetEntry, withoutDeepLinkParams } from "./data/url-target";
@@ -286,6 +288,7 @@ class CameraGalleryCard extends LitElement {
       _filterImage: { type: Boolean },
       _filterFavorites: { type: Boolean },
       _ptzActive: { type: Boolean },
+      _nvr: { type: Object },
     };
   }
 
@@ -316,6 +319,8 @@ class CameraGalleryCard extends LitElement {
     this._previewVideoEl = null;
     this._prefetchKey = "";
     this._selectedPreviewSrc = "";
+    // BL-008: { src, time, channel, stream, addon, poster } while the NVR recording of the selected item plays.
+    this._nvr = null;
     this._deleted = new Set();
     this._deletedFrigateEventIds = new Set();
     // Clean up legacy NEW-arrival localStorage from prior builds. The
@@ -3570,6 +3575,30 @@ class CameraGalleryCard extends LitElement {
           </button>
         `;
 
+      case "nvr": {
+        // BL-008: play the NVR's recording from this item's moment (Low = sub stream, High = main stream).
+        if (this._nvrChannel() === null || !ctx.selected || ctx.noResultsForFilter) return null;
+        const dtMs = ctx.filtered[ctx.idx]?.dtMs;
+        if (!Number.isFinite(dtMs)) return null;
+        return html`${["sub", "main"].map(
+          (stream) => html`
+            <button
+              class="gallery-pill live-pill-btn gallery-pill--wide nvr-pill"
+              title=${stream === "sub"
+                ? "Play the NVR recording from this moment (low resolution, starts fast)"
+                : "Play the NVR recording from this moment (high resolution, slower to start)"}
+              @pointerdown=${(e) => e.stopPropagation()}
+              @click=${(e) => {
+                e.stopPropagation();
+                this._startNvr(ctx.selected, dtMs, stream);
+              }}
+            >
+              <ha-icon icon="mdi:filmstrip-box"></ha-icon><span>${stream === "sub" ? "Low" : "High"}</span>
+            </button>
+          `
+        )}`;
+      }
+
       case "video_time":
         // Rendered as a floating bottom-right overlay, not inside the
         // pill row — see the video-controls block in the preview
@@ -3579,6 +3608,31 @@ class CameraGalleryCard extends LitElement {
       default:
         return null;
     }
+  }
+
+  /** BL-008: the configured NVR channel of this camera, or null (no Low / High buttons). */
+  _nvrChannel() {
+    return nvrChannelOf(this.config?.nvr_channel);
+  }
+
+  _startNvr(src, dtMs, stream) {
+    const channel = this._nvrChannel();
+    if (channel === null || !src || !Number.isFinite(dtMs)) return;
+    // The clip under the player would keep playing (and talking) otherwise.
+    this.renderRoot?.querySelector("#preview-video-host video")?.pause?.();
+    const poster = this._sidecarFor(src) || (this._isVideoSmart(src) ? "" : src);
+    this._nvr = {
+      src,
+      time: dtMs,
+      channel,
+      stream,
+      addon: String(this.config?.nvr_addon || DEFAULT_NVR_ADDON),
+      poster,
+    };
+  }
+
+  _stopNvr() {
+    if (this._nvr) this._nvr = null;
   }
 
   _renderLivePillById(id) {
@@ -6140,6 +6194,10 @@ class CameraGalleryCard extends LitElement {
       </div>
     ` : html``;
 
+    // BL-008: the NVR player belongs to the item it was started on; browsing away (or going live) closes it.
+    const nvrOn = !!this._nvr && !isLive && this._nvr.src === selected;
+    if (this._nvr && !nvrOn) Promise.resolve().then(() => this._stopNvr());
+
     const previewBlock = showPreviewSection
       ? html`
           <div
@@ -6198,6 +6256,20 @@ class CameraGalleryCard extends LitElement {
                   : selectedIsVideo
                     ? html`<div id="preview-video-host" class="preview-video-host"></div>`
                     : html`<img class="pimg" src=${selectedUrl} alt="" style=${this._previewStillStyle(selected)} />`}
+            ${nvrOn
+              ? html`<cgc-nvr-player
+                  .hass=${this._hass}
+                  .channel=${this._nvr.channel}
+                  .time=${this._nvr.time}
+                  .stream=${this._nvr.stream}
+                  .addon=${this._nvr.addon}
+                  .poster=${this._nvr.poster}
+                  @nvr-close=${() => this._stopNvr()}
+                  @nvr-stream=${(e) => {
+                    if (this._nvr) this._nvr = { ...this._nvr, stream: e.detail.stream };
+                  }}
+                ></cgc-nvr-player>`
+              : html``}
             ${this._hasLiveConfig() ? (() => {
               const liveCropStyle = this._getLiveCropStyle();
               return html`<div id="live-card-host" class="live-card-host${isLive ? '' : ' live-host-hidden'}${liveCropStyle ? ' has-crop' : ''}" style="${liveCropStyle}"></div>${this._renderSnapshotToast()}`;

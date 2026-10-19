@@ -263,3 +263,77 @@ describe("preloading", () => {
     expect(tileImg(card, 1)?.getAttribute("src")).toBe(`${DIR}/car_20261019_115900_snapshot.jpg`);
   });
 });
+
+describe("NVR recording of the selected item (BL-008)", () => {
+  const nvrPills = (card: any) =>
+    [...card.shadowRoot.querySelectorAll(".nvr-pill")] as HTMLButtonElement[];
+  const player = (card: any) => q(card, ".preview cgc-nvr-player");
+  const settle = async (card: any) => {
+    await card.updateComplete;
+    await Promise.resolve();
+    await card.updateComplete;
+  };
+
+  it("no Low / High without an nvr_channel", async () => {
+    const card = await renderCard({ thumbnail_folder: "thumbs" });
+    expect(nvrPills(card)).toHaveLength(0);
+  });
+
+  it("Low opens the player on the item's moment, over its preview", async () => {
+    const card = await renderCard({ thumbnail_folder: "thumbs", nvr_channel: 7 });
+    expect(nvrPills(card).map((b) => b.textContent!.trim())).toEqual(["Low", "High"]);
+    nvrPills(card)[0]!.click();
+    await settle(card);
+    const p = player(card);
+    expect(p).not.toBeNull();
+    expect([p.channel, p.time, p.stream, p.addon]).toEqual([
+      7,
+      DAY1[0]!.dtMs,
+      "sub",
+      "local_nvr_playback",
+    ]);
+    expect(p.poster).toBe(side("motion_20261019_120000.gif"));
+  });
+
+  it("follows Low / High switches made in the player, and closes on its request", async () => {
+    const card = await renderCard({ nvr_channel: 7, nvr_addon: "local_other" });
+    nvrPills(card)[1]!.click();
+    await settle(card);
+    expect([player(card).stream, player(card).addon]).toEqual(["main", "local_other"]);
+    player(card).dispatchEvent(
+      new CustomEvent("nvr-stream", { detail: { stream: "sub" }, bubbles: true, composed: true })
+    );
+    await settle(card);
+    expect(player(card).stream).toBe("sub");
+    player(card).dispatchEvent(new CustomEvent("nvr-close", { bubbles: true, composed: true }));
+    await settle(card);
+    expect(player(card)).toBeNull();
+    expect(card._nvr).toBeNull();
+  });
+
+  it("browsing to another item closes the player", async () => {
+    const card = await renderCard({ nvr_channel: 7 });
+    nvrPills(card)[0]!.click();
+    await settle(card);
+    expect(player(card)).not.toBeNull();
+    card._selectedIndex = 1;
+    card.requestUpdate();
+    await settle(card);
+    expect(player(card)).toBeNull();
+    expect(card._nvr).toBeNull();
+    nvrPills(card)[0]!.click();
+    await settle(card);
+    expect(player(card).time).toBe(DAY1[1]!.dtMs);
+  });
+
+  it("a channel that isn't a number is refused by the config", async () => {
+    const card: any = document.createElement("camera-gallery-card");
+    expect(() =>
+      card.setConfig({
+        entities: ["sensor.synthetic"],
+        path_datetime_format: "YYYYMMDD_HHmmss",
+        nvr_channel: "seven",
+      })
+    ).toThrow();
+  });
+});

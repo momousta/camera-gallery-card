@@ -16,12 +16,17 @@
  *       navigation_path: /main-dashboard/front-right   # "Open camera" in the full view (optional)
  *       gallery_id: front_right                         # that page's gallery card `url_id`: open it on this
  *                                                       # exact file (cgc_src) and moment (cgc_time)
+ *       nvr_channel: 7                                  # BL-008: Low / High in the full view play the NVR's
+ *                                                       # recording from the moment on the track
+ *   nvr_addon: local_nvr_playback             # the NVR Playback add-on's slug (default)
  */
 
 import { LitElement, html } from "lit";
 import { guard } from "lit/directives/guard.js";
 
 import { monthOf } from "../data/calendar";
+import { DEFAULT_NVR_ADDON, NVR_STREAM_LABEL, NVR_STREAMS, nvrChannelOf } from "../nvr/nvr-api";
+import "../nvr/nvr-player.js";
 import { ThumbPreloader } from "../data/preload";
 import { sidecarFolder, sidecarUrl } from "../data/sidecar";
 import { renderCalendarPicker } from "../ui/calendar-picker";
@@ -128,7 +133,13 @@ export class CameraTimelineCard extends LitElement {
     if (!config.path_datetime_format) {
       throw new Error("camera-timeline-card: set `path_datetime_format` (e.g. YYYYMMDD_HHmmss)");
     }
-    this.config = { thumbnail_folder: "", preload: true, ...config, cameras: cams };
+    this.config = {
+      thumbnail_folder: "",
+      preload: true,
+      nvr_addon: DEFAULT_NVR_ADDON,
+      ...config,
+      cameras: cams,
+    };
     this._refs = new Map();
     this._rebuild();
   }
@@ -638,7 +649,8 @@ export class CameraTimelineCard extends LitElement {
       title=${name}
       @click=${() => {
         this._pause();
-        this._overlay = { ci, item };
+        // t: the moment on the track, where NVR playback starts (BL-008).
+        this._overlay = { ci, item, t, nvr: null };
       }}
     >
       ${url
@@ -662,17 +674,41 @@ export class CameraTimelineCard extends LitElement {
   }
 
   _renderOverlay() {
-    const { ci, item } = this._overlay;
+    const { ci, item, t, nvr } = this._overlay;
     const cam = this.config.cameras[ci];
     const preview = this._previewFor(item.src);
     const close = () => (this._overlay = null);
     const locale = this._hass?.locale;
+    const channel = nvrChannelOf(cam?.nvr_channel);
+    const setNvr = (stream) => (this._overlay = { ...this._overlay, nvr: stream });
     return html`
       <div class="tl-overlay-backdrop" @click=${close}></div>
       <div class="tl-overlay" role="dialog" aria-label=${cam?.name || cam?.entity || ""}>
         <div class="tl-overlay-head">
-          <span>${cam?.name || cam?.entity} · ${formatTimeFromMs(item.ms, locale)}</span>
-          <span>
+          <span
+            >${cam?.name || cam?.entity} ·
+            ${nvr
+              ? `NVR from ${formatTimeFromMs(t, locale)}`
+              : formatTimeFromMs(item.ms, locale)}</span
+          >
+          <span class="tl-overlay-actions">
+            ${channel !== null
+              ? NVR_STREAMS.map(
+                  (s) =>
+                    html`<button
+                      class="tl-btn ${nvr === s ? "on" : ""}"
+                      title=${nvr === s
+                        ? "Back to the snapshot"
+                        : s === "sub"
+                          ? "Play the NVR recording from this moment (low resolution, starts fast)"
+                          : "Play the NVR recording from this moment (high resolution, slower to start)"}
+                      aria-pressed=${nvr === s ? "true" : "false"}
+                      @click=${() => setNvr(nvr === s ? null : s)}
+                    >
+                      <ha-icon icon="mdi:filmstrip-box"></ha-icon>${NVR_STREAM_LABEL[s]}
+                    </button>`
+                )
+              : ""}
             ${cam?.navigation_path
               ? html`<button class="tl-btn" @click=${() => this._openCamera(cam, item)}>
                   <ha-icon icon="mdi:cctv"></ha-icon>Open camera
@@ -683,22 +719,36 @@ export class CameraTimelineCard extends LitElement {
             </button>
           </span>
         </div>
-        ${VIDEO_RE.test(item.src)
-          ? html`<video
-              class="tl-overlay-media"
-              src=${item.src}
-              poster=${preview}
-              controls
-              autoplay
-              muted
-              playsinline
-            ></video>`
-          : html`<img
-              class="tl-overlay-media"
-              src=${item.src}
-              alt=""
-              style=${preview ? `background-image:url("${preview}")` : ""}
-            />`}
+        ${nvr && channel !== null
+          ? html`<div class="tl-overlay-nvr">
+              <cgc-nvr-player
+                .hass=${this._hass}
+                .channel=${channel}
+                .time=${Number.isFinite(t) ? t : item.ms}
+                .stream=${nvr}
+                .addon=${this.config.nvr_addon || DEFAULT_NVR_ADDON}
+                .poster=${preview}
+                .bare=${true}
+                @nvr-close=${() => setNvr(null)}
+                @nvr-stream=${(e) => setNvr(e.detail.stream)}
+              ></cgc-nvr-player>
+            </div>`
+          : VIDEO_RE.test(item.src)
+            ? html`<video
+                class="tl-overlay-media"
+                src=${item.src}
+                poster=${preview}
+                controls
+                autoplay
+                muted
+                playsinline
+              ></video>`
+            : html`<img
+                class="tl-overlay-media"
+                src=${item.src}
+                alt=""
+                style=${preview ? `background-image:url("${preview}")` : ""}
+              />`}
       </div>
     `;
   }

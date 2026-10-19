@@ -173,6 +173,18 @@ A few notes on the generic walker:
 - **Calendar**: tap the date to pick a day from a month calendar; days with media are highlighted, the others can't be picked
 - **Paired image + video** — when a snapshot and clip share the same filename stem they're shown as one item, with the image used as the thumbnail
 
+### NVR recordings (owner fork)
+
+With `nvr_channel` set, the gallery pills get **Low** and **High**. They play the Reolink NVR's own recording from
+the selected item's moment:
+- the progress shows over the snapshot while the NVR file is fetched;
+- the player's clock shows the moment being watched;
+- Low and High switch in place, and playback continues into the next recording.
+
+Low is the sub stream (H.264, plays everywhere). High is the main stream (HEVC, only where the device decodes
+it). This needs the **NVR Playback** add-on, which fetches the recordings next to the NVR and serves them through
+Home Assistant ingress. The timeline card's cameras take `nvr_channel` too (Low / High in the full view).
+
 ### Video controls
 
 - Video autoplay toggle (gallery)
@@ -350,6 +362,9 @@ data:
 | `thumbnail_folder` | Sensor mode: a folder next to each file holding small previews named `<file name>.jpg` (e.g. `thumbs` → `/local/cam/thumbs/clip.gif.jpg`, made by a thumbnailer). Used for the strip, the frames shown while scrubbing (the full file loads when you stop), as the placeholder under the full file and as video posters. A missing preview falls back to the file itself (default off) |
 | `preload_thumbnails` | With `thumbnail_folder`: preload the previews of the whole day, nearest the selection first, then of the days around it (default `false`) |
 | `preload_days` | Days on each side of the shown day to preload, 0–7 (default `2`) |
+| **NVR recordings (owner fork)** | |
+| `nvr_channel` | The camera's channel on a Reolink NVR. Adds **Low** / **High** pills that play the NVR's recording from the selected item's moment, through the NVR Playback add-on (default off) |
+| `nvr_addon` | That add-on's slug (default `local_nvr_playback`) |
 | `bar_position` | Preview timestamp bar position |
 | `bar_opacity` | Preview timestamp bar opacity |
 | **Live view** | |

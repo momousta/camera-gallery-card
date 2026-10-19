@@ -288,6 +288,22 @@ export const timelineStyles = css`
     gap: 8px;
     font-weight: 800;
   }
+  .tl-overlay-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+  /* BL-008: the NVR player fills this box. */
+  .tl-overlay-nvr {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    max-height: 75vh;
+    overflow: hidden;
+    border-radius: 12px;
+    background: #000;
+  }
   .tl-overlay-media {
     width: 100%;
     max-height: 75vh;

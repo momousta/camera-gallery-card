@@ -209,6 +209,8 @@ export interface InputConfig {
   thumbnail_folder?: string;
   preload_thumbnails?: boolean;
   preload_days?: number;
+  nvr_channel?: number;
+  nvr_addon?: string;
   pill_size?: number;
   row_gap?: number;
   card_height?: number;

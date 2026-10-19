@@ -107,6 +107,7 @@ import {
   THUMBNAIL_FRAME_PCT_MAX,
   THUMBNAIL_FRAME_PCT_MIN,
 } from "../const";
+import { DEFAULT_NVR_ADDON } from "../nvr/nvr-api";
 
 /**
  * Integer in [min, max]. Numeric range refinement on top of `integer()`.
@@ -528,6 +529,10 @@ export const cameraGalleryCardConfigStruct = type({
   thumbnail_folder: defaulted(string(), DEFAULT_THUMBNAIL_FOLDER),
   preload_thumbnails: defaulted(boolean(), DEFAULT_PRELOAD_THUMBNAILS),
   preload_days: defaulted(intInRange(PRELOAD_DAYS_MIN, PRELOAD_DAYS_MAX), DEFAULT_PRELOAD_DAYS),
+  // BL-008: this camera's NVR channel. Adds Low / High buttons that play the NVR's recording from the selected
+  // item's moment, through the NVR Playback add-on (`nvr_addon`, its slug).
+  nvr_channel: optional(intInRange(0, 63)),
+  nvr_addon: defaulted(string(), DEFAULT_NVR_ADDON),
   pill_size: defaulted(intInRange(PILL_SIZE_MIN, PILL_SIZE_MAX), PILL_SIZE_DEFAULT),
   row_gap: defaulted(intInRange(ROW_GAP_MIN, ROW_GAP_MAX), ROW_GAP_DEFAULT),
   card_height: defaulted(intInRange(CARD_HEIGHT_MIN, CARD_HEIGHT_MAX), CARD_HEIGHT_DEFAULT),
