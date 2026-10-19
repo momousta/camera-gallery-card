@@ -288,6 +288,8 @@ Set a `url_id` in the editor's **Source → View** section (or `url_id: porch` i
 | `cgc_id` | Must match the card's `url_id` exactly, or the whole query string is ignored |
 | `cgc_view` | `live` or `gallery` — which screen to open |
 | `cgc_camera` | An entry from the card's own live camera list — a camera entity, or a `live_stream_urls` stream — opens live view on that camera |
+| `cgc_src` | Owner fork: one of the card's own gallery files (e.g. `/local/snapshots/cam/motion_20261019_120000.gif`) — opens the gallery on that file, switching to its day |
+| `cgc_time` | Owner fork: a moment (epoch ms or seconds, or ISO 8601) — opens the gallery on the item at or just before it; the fallback when `cgc_src` is gone |
 
 A worked example, e.g. from a motion automation:
 
@@ -309,6 +311,8 @@ data:
 
 > [!NOTE]
 > All of `cgc_id`, `cgc_view`, and `cgc_camera` are case-sensitive. `cgc_view=Gallery` isn't recognized as `gallery` — and if a camera is also present, that falls through to opening *live* instead, the opposite of what a mistyped gallery link probably intended. And if more than one card on the dashboard shares the same `url_id`, they'll all react to the same query string at once — keep `url_id` unique per card.
+
+> Owner fork: the parameters apply once and are then removed from the address, also when the card's page is opened by in-app navigation (a view HA had already built, e.g. from the timeline card's "Open camera"), not only on page load. A `cgc_src` that isn't one of the card's own items is ignored, so a link can't make the card load anything new.
 
 ---
 

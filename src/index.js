@@ -49,6 +49,7 @@ import { calendarPickerStyles } from "./ui/calendar-picker-styles";
 import "./timeline/timeline-card.js";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import { parseUrlActions } from "./data/url-actions";
+import { indexOfTarget, parseUrlTarget, pickTargetEntry, withoutDeepLinkParams } from "./data/url-target";
 import {
   detectObjectForSrc,
   isVideoForSrc as viewIsVideoForSrc,
@@ -479,6 +480,8 @@ class CameraGalleryCard extends LitElement {
     // hass, consumed the first time the item list actually populates (see
     // `updated()`) so the newest clip opens regardless of thumb_sort_order.
     this._pendingUrlGallerySelectNewest = false;
+    // BL-008 (fork): a deep-linked file/moment (`cgc_src`/`cgc_time`), selected once the items are known.
+    this._pendingUrlTarget = null;
     this._liveMuted = false;
     this._livePipActive = false;
     this._galleryPipActive = false;
@@ -873,6 +876,8 @@ class CameraGalleryCard extends LitElement {
     // HA re-attaches cached views without re-rendering: re-arm the strip's
     // reveal observer that disconnectedCallback tore down.
     if (this.hasUpdated) this._setupThumbObserver();
+    // In-app navigation to this view (e.g. the timeline's "Open camera") may carry a deep link.
+    if (this._hass && this.config) this._applyUrlDeepLink(false);
   }
 
   disconnectedCallback() {
@@ -966,28 +971,8 @@ class CameraGalleryCard extends LitElement {
         this._viewMode = "live";
       }
       // Notification deep-link (issue #218): `?cgc_id=<url_id>` overrides
-      // `start_mode`/the default live camera. Runs after the block above so
-      // a URL override lands on top of the configured default, and after
-      // setConfig's own `_liveSelectedCamera` default (src/index.js ~4997).
-      const urlActions = parseUrlActions({
-        search: window.location.search,
-        urlId: this.config?.url_id,
-        cameras: this._getLiveCameraOptions(),
-        hasLiveConfig: this._hasLiveConfig(),
-      });
-      if (urlActions.view) {
-        this._viewMode = urlActions.view;
-        if (urlActions.view === "media") this._pendingUrlGallerySelectNewest = true;
-      }
-      if (urlActions.camera) {
-        this._liveSelectedCamera = urlActions.camera;
-        // A camera deep-link names one camera, so break out of grid layout
-        // onto it — otherwise `isGridLayout()` would stay true and the
-        // deep-linked camera would never actually be shown (issue #218's
-        // reported use case). Reuses the same override `_onGridTileTap`
-        // sets, so the existing "Back to grid" pill picks it up for free.
-        this._liveLayoutOverride = "single";
-      }
+      // `start_mode`/the default live camera (after the block above).
+      this._applyUrlDeepLink(true);
       // Fire-and-forget: subscribe to HA's Frigate event push stream.
       this._subscribeFrigateEvents();
       this.requestUpdate();
@@ -3793,6 +3778,73 @@ class CameraGalleryCard extends LitElement {
     }
   }
 
+  /**
+   * Deep links (upstream PR #236, issue #218, plus the fork's `cgc_src`/`cgc_time`, BL-008):
+   * `?cgc_id=<url_id>&cgc_view=live|gallery&cgc_camera=…&cgc_src=…&cgc_time=…`.
+   * Runs at first hass and again whenever the card is shown again (HA re-attaches cached views on in-app
+   * navigation). The parameters are then removed from the address, so they apply once.
+   * @param {boolean} initial first hass: set the view directly (nothing is mounted yet)
+   */
+  _applyUrlDeepLink(initial) {
+    const search = window.location.search;
+    if (!search || !this.config?.url_id) return;
+    const urlActions = parseUrlActions({
+      search,
+      urlId: this.config?.url_id,
+      cameras: this._getLiveCameraOptions(),
+      hasLiveConfig: this._hasLiveConfig(),
+    });
+    const target = parseUrlTarget({ search, urlId: this.config?.url_id });
+    if (!urlActions.view && !urlActions.camera && !target) return;
+
+    // A file or moment means the gallery; it outranks a camera.
+    const view = target ? "media" : urlActions.view;
+    if (urlActions.camera && !target) {
+      this._liveSelectedCamera = urlActions.camera;
+      // A camera deep-link names one camera, so break out of grid layout
+      // onto it — otherwise `isGridLayout()` would stay true and the
+      // deep-linked camera would never actually be shown (issue #218's
+      // reported use case). Reuses the same override `_onGridTileTap`
+      // sets, so the existing "Back to grid" pill picks it up for free.
+      this._liveLayoutOverride = "single";
+    }
+    if (view) {
+      if (initial) this._viewMode = view;
+      else this._setViewMode(view);
+    }
+    this._pendingUrlGallerySelectNewest = view === "media" && !target;
+    this._pendingUrlTarget = target;
+    try {
+      window.history.replaceState(window.history.state, "", withoutDeepLinkParams(window.location.href));
+    } catch (_) {
+      // a sandboxed frame: the link just applies again on the next attach
+    }
+    this.requestUpdate();
+  }
+
+  /** BL-008: select the deep-linked file, or the frame at or before the deep-linked moment, switching day first. */
+  _consumeUrlTarget(base, filtered) {
+    const target = this._pendingUrlTarget;
+    const entry = pickTargetEntry(base.allWithDay || [], target);
+    if (!entry) {
+      this._pendingUrlTarget = null;
+      return;
+    }
+    const hops = target.hops ?? 0;
+    if (entry.dayKey && entry.dayKey !== base.activeDay && hops < 2) {
+      // Its day first; the next update selects it in that day's strip.
+      this._pendingUrlTarget = { src: entry.src, time: entry.dtMs ?? target.time, hops: hops + 1 };
+      this._selectedDay = entry.dayKey;
+      return;
+    }
+    this._pendingUrlTarget = null;
+    const i = indexOfTarget(filtered, entry);
+    if (i >= 0) {
+      this._selectedIndex = i;
+      this._pendingScrollToI = i;
+    }
+  }
+
   _setViewMode(nextMode) {
     const mode = nextMode === "live" ? "live" : "media";
     if (mode === "live" && !this._hasLiveConfig()) return;
@@ -5653,6 +5705,8 @@ class CameraGalleryCard extends LitElement {
       // `oldest` (see sortItemsByTime in data/item-pipeline.ts). Consumed
       // exactly once regardless of outcome so a later render can't yank the
       // user off a clip they navigated to themselves.
+      if (this._pendingUrlTarget && base.rawItems.length) this._consumeUrlTarget(base, filtered);
+
       if (this._pendingUrlGallerySelectNewest) {
         this._pendingUrlGallerySelectNewest = false;
         if (filtered.length) {
