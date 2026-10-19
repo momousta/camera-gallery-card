@@ -42,7 +42,12 @@ const CONFIG = {
   path_datetime_format: "YYYYMMDD_HHmmss",
   thumbnail_folder: "thumbs",
   cameras: [
-    { entity: "sensor.ft_front", name: "Front", navigation_path: "/main-dashboard/camera1" },
+    {
+      entity: "sensor.ft_front",
+      name: "Front",
+      navigation_path: "/main-dashboard/camera1",
+      gallery_id: "camera1",
+    },
     { entity: "sensor.ft_back", name: "Back" },
     { entity: "sensor.ft_door", name: "Doorbell" },
   ],
@@ -235,8 +240,31 @@ describe("the full view of one camera", () => {
     window.addEventListener("location-changed", nav);
     ($(card, ".tl-overlay-head .tl-btn") as HTMLButtonElement).click();
     expect(window.location.pathname).toBe("/main-dashboard/camera1");
+    const q = new URLSearchParams(window.location.search);
+    expect(Object.fromEntries(q)).toEqual({
+      cgc_id: "camera1",
+      cgc_view: "gallery",
+      cgc_src: L("front", "car_20261019_124500_snapshot.jpg"),
+      cgc_time: String(at(12, 45)),
+    });
     expect(nav).toHaveBeenCalledTimes(1);
+    await card.updateComplete;
+    expect($(card, ".tl-overlay")).toBeNull();
     window.removeEventListener("location-changed", nav);
+  });
+
+  it("without a gallery_id, Open camera goes to the plain page", async () => {
+    const card = await render({
+      cameras: [
+        { entity: "sensor.ft_front", name: "Front", navigation_path: "/main-dashboard/camera1" },
+      ],
+    });
+    card._setT(at(12, 50));
+    await card.updateComplete;
+    $$(card, ".tl-tile")[0]!.click();
+    await card.updateComplete;
+    ($(card, ".tl-overlay-head .tl-btn") as HTMLButtonElement).click();
+    expect(window.location.pathname + window.location.search).toBe("/main-dashboard/camera1");
   });
 
   it("a video plays in the full view with its preview as poster", async () => {

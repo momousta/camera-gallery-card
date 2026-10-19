@@ -14,6 +14,8 @@
  *     - entity: sensor.filetrack_front_right
  *       name: Front Right
  *       navigation_path: /main-dashboard/front-right   # "Open camera" in the full view (optional)
+ *       gallery_id: front_right                         # that page's gallery card `url_id`: open it on this
+ *                                                       # exact file (cgc_src) and moment (cgc_time)
  */
 
 import { LitElement, html } from "lit";
@@ -451,6 +453,24 @@ export class CameraTimelineCard extends LitElement {
 
   // ── navigation and the full view ────────────────────────────────────
 
+  /** "Open camera": the camera's page, opened on this exact file and moment when its gallery has a `url_id`. */
+  _openCamera(cam, item) {
+    let path = cam?.navigation_path;
+    if (!path) return;
+    const id = typeof cam.gallery_id === "string" ? cam.gallery_id.trim() : "";
+    if (id && item) {
+      const q = new URLSearchParams({
+        cgc_id: id,
+        cgc_view: "gallery",
+        cgc_src: item.src,
+        cgc_time: String(item.ms),
+      });
+      path += (path.includes("?") ? "&" : "?") + q.toString();
+    }
+    this._overlay = null;
+    this._navigate(path);
+  }
+
   _navigate(path) {
     if (!path) return;
     window.history.pushState(null, "", path);
@@ -654,7 +674,7 @@ export class CameraTimelineCard extends LitElement {
           <span>${cam?.name || cam?.entity} · ${formatTimeFromMs(item.ms, locale)}</span>
           <span>
             ${cam?.navigation_path
-              ? html`<button class="tl-btn" @click=${() => this._navigate(cam.navigation_path)}>
+              ? html`<button class="tl-btn" @click=${() => this._openCamera(cam, item)}>
                   <ha-icon icon="mdi:cctv"></ha-icon>Open camera
                 </button>`
               : ""}
