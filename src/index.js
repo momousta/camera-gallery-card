@@ -42,7 +42,9 @@ import { isGifPath } from "./util/gif-frame";
 import { pickCenterIndex, ScrubGesture } from "./data/scrub";
 import { sidecarFolder, sidecarUrl } from "./data/sidecar";
 import { planPreload, ThumbPreloader } from "./data/preload";
-import { firstWeekdayFor, monthGrid, monthOf, monthRange, shiftMonth, weekdayLabels } from "./data/calendar";
+import { monthOf } from "./data/calendar";
+import { renderCalendarPicker } from "./ui/calendar-picker";
+import { calendarPickerStyles } from "./ui/calendar-picker-styles";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import {
   detectObjectForSrc,
@@ -3646,69 +3648,31 @@ class CameraGalleryCard extends LitElement {
     `;
   }
 
-  /** BL-006: a month calendar. Days with clips can be picked; the arrows move between months that have some. */
+  /** BL-006: a month calendar (shared with the timeline card). Days with clips can be picked. */
   _renderDatePicker() {
     if (!this._showDatePicker) return html``;
     const days = this._datePickerDays || [];
-    const have = new Set(days);
-    const range = monthRange(days);
-    const selected = this._selectedDay || days[0] || null;
-    const month = this._datePickerMonth || monthOf(selected || "") || range?.max || "";
-    if (!month) return html``;
-    const locale = this._hass?.locale;
-    const lang = locale?.language;
-    const firstWeekday = firstWeekdayFor(locale?.first_weekday, lang);
-    const today = dayKeyFromMs(Date.now()) || "";
-    const weeks = monthGrid(month, firstWeekday, { hasMedia: (d) => have.has(d), today, selected });
-    const canPrev = !!range && month > range.min;
-    const canNext = !!range && month < range.max;
-    const go = (delta) => {
-      this._datePickerMonth = shiftMonth(month, delta);
-      this.requestUpdate();
-    };
-    const pick = (day) => {
-      this._selectedDay = day;
-      this._selectedIndex = 0;
-      this._pendingScrollToI = null;
-      this._forceThumbReset = true;
-      this._exitSelectMode();
-      if (this.config?.clean_mode) this._previewOpen = false;
-      if (this._isLiveActive()) this._setViewMode("media");
-      this._closeDatePicker();
-    };
-    const title = formatMonth(month, locale);
-
-    return html`
-      <div class="live-picker-backdrop" @click=${() => this._closeDatePicker()}></div>
-      <div class="live-picker date-picker cal-picker" @click=${(e) => e.stopPropagation()}>
-        <div class="live-picker-head">
-          <button class="cal-nav" ?disabled=${!canPrev} @click=${() => go(-1)} title="Previous month" aria-label="Previous month">
-            <ha-icon icon="mdi:chevron-left"></ha-icon>
-          </button>
-          <div class="live-picker-title cal-title">${title}</div>
-          <button class="cal-nav" ?disabled=${!canNext} @click=${() => go(1)} title="Next month" aria-label="Next month">
-            <ha-icon icon="mdi:chevron-right"></ha-icon>
-          </button>
-          <button class="live-picker-close" @click=${() => this._closeDatePicker()} title="Close" aria-label="Close">
-            <ha-icon icon="mdi:close"></ha-icon>
-          </button>
-        </div>
-        <div class="cal-grid" role="grid" aria-label=${title}>
-          ${weekdayLabels(firstWeekday, lang).map((w) => html`<div class="cal-wd" aria-hidden="true">${w}</div>`)}
-          ${weeks.flat().map((c) =>
-            c.day
-              ? html`<button
-                  class="cal-day ${c.hasMedia ? "has" : ""} ${c.isSelected ? "on" : ""} ${c.isToday ? "today" : ""}"
-                  ?disabled=${!c.hasMedia}
-                  aria-pressed=${c.isSelected ? "true" : "false"}
-                  aria-label=${formatDay(c.day, locale)}
-                  @click=${() => pick(c.day)}
-                >${c.date}</button>`
-              : html`<div class="cal-blank" aria-hidden="true"></div>`
-          )}
-        </div>
-      </div>
-    `;
+    return renderCalendarPicker({
+      days,
+      month: this._datePickerMonth,
+      selected: this._selectedDay || days[0] || null,
+      locale: this._hass?.locale,
+      onMonth: (month) => {
+        this._datePickerMonth = month;
+        this.requestUpdate();
+      },
+      onPick: (day) => {
+        this._selectedDay = day;
+        this._selectedIndex = 0;
+        this._pendingScrollToI = null;
+        this._forceThumbReset = true;
+        this._exitSelectMode();
+        if (this.config?.clean_mode) this._previewOpen = false;
+        if (this._isLiveActive()) this._setViewMode("media");
+        this._closeDatePicker();
+      },
+      onClose: () => this._closeDatePicker(),
+    });
   }
 
   _renderLivePicker() {
@@ -6755,7 +6719,7 @@ class CameraGalleryCard extends LitElement {
   }
 
   static get styles() {
-    return cardStyles;
+    return [cardStyles, calendarPickerStyles];
   }
 }
 
