@@ -5,7 +5,7 @@ export const timelineStyles = css`
     display: block;
     position: relative;
     --tl-gap: 8px;
-    --tl-lane-h: 4px;
+    --tl-lane-h: 7px;
     color: var(--primary-text-color);
   }
 
