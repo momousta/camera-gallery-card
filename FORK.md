@@ -6,9 +6,11 @@ It lives in `/share/dev/camera-gallery-card` until the owner pushes it to his Gi
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything but don't push").
 
-- **Now:** build `3.1.0-owner.5` since 2026-10-19 14:20 (BACKLOG BL-007: the timeline card). Check the resource
-  with `node deploy/ha-deploy.mjs status`.
-- **Before:** `3.1.0-owner.4` (`?v=514a65062fdf`, BL-006), saved in `/share/backups/bl002/owner.4-514a65062fdf/`.
+- **Now:** build `3.1.0-owner.6` since 2026-10-19 15:00: deep links, and "Open camera" from the timeline on the
+  same file. Check the resource with `node deploy/ha-deploy.mjs status`.
+- **Before:** `3.1.0-owner.5` (`?v=b3fa1f014fd6`, BL-007), saved in `/share/backups/bl002/owner.5-b3fa1f014fd6/`.
+- **Earlier:** `3.1.0-owner.4`, saved in `/share/backups/bl002/owner.4-514a65062fdf/`.
+- **Older:** `3.1.0-owner.4` (`?v=514a65062fdf`, BL-006), saved in `/share/backups/bl002/owner.4-514a65062fdf/`.
 - **Earlier still:** `3.1.0-owner.3` (`?v=68f5d4fa0b24`), saved in `/share/backups/bl002/owner.3-68f5d4fa0b24/`. To go
   back to it, copy both files into `dist/` and run `switch`.
 - **Earlier:** `3.1.0-owner.2` (`?v=9b81a5001b09`), saved in `/share/backups/bl002/owner.2-9b81a5001b09/`. To go
@@ -60,6 +62,11 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
   - Tapping a camera loads that one full file.
   - 826 previews (11.9 MB) preloaded for today and the picked day.
   - 0 page errors.
+- **owner.6 (deep links)**, live:
+  - the timeline at 13:00 → "Open camera" → the Front Right gallery on `hourly_20261019_130000.gif`, in gallery mode,
+    with the address cleaned;
+  - a moment on 10-17 → that day, on `motion_20261017_205744.gif`;
+  - 0 page errors.
 - **Not checked:** real phones, iOS Safari, live WebRTC and talkback (WebRTC doesn't run in headless Chromium).
 
 Harness and results: `/share/dev/bl002-work`.
@@ -93,6 +100,10 @@ Harness and results: `/share/dev/bl002-work`.
 | `feat(timeline): camera-timeline-card…`                        | A second element: every camera on one time track (shared moment, previews, play, calendar, full view, preloading)                                                                                                          | BL-007: owner asked for one timeline for all cameras                                                              |
 | `style(timeline): taller activity lanes`                       | 7 px lanes                                                                                                                                                                                                                 | An easier thumb target                                                                                            |
 | `build: fork version 3.1.0-owner.5`                            | Version shown in the bundle banner                                                                                                                                                                                         | The live build                                                                                                    |
+| PR #236 (6 commits, cherry-picked, authors kept)               | `url_id` deep links: `?cgc_id=…&cgc_view=live/gallery&cgc_camera=…`                                                                                                                                                        | Notification and timeline links into a card                                                                       |
+| `feat(deep-link): open the gallery on one file or moment…`     | Fork: `cgc_src` (an exact file of the card's own) and `cgc_time` (the frame at or before a moment), applied on in-app navigation too, removed from the address after use                                                   | BL-007 follow-up: the timeline's "Open camera" should land on the same snapshot                                   |
+| `feat(timeline): Open camera opens that camera's gallery…`     | Timeline cameras' `gallery_id` → the link                                                                                                                                                                                  | Same                                                                                                              |
+| `build: fork version 3.1.0-owner.6`                            | Version shown in the bundle banner                                                                                                                                                                                         | The live build                                                                                                    |
 
 ## Build and test
 
