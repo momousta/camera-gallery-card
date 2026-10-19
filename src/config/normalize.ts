@@ -206,6 +206,9 @@ export interface InputConfig {
   capture_video_thumbnails?: boolean;
   gif_thumbnails?: string;
   scrub_on_drag?: boolean;
+  thumbnail_folder?: string;
+  preload_thumbnails?: boolean;
+  preload_days?: number;
   pill_size?: number;
   row_gap?: number;
   card_height?: number;

@@ -40,6 +40,8 @@ import { canDeleteItem, deleteItem } from "./data/delete-service";
 import { PendingPosterCollector, PosterCacheClient } from "./data/poster-cache";
 import { isGifPath } from "./util/gif-frame";
 import { pickCenterIndex, ScrubGesture } from "./data/scrub";
+import { sidecarFolder, sidecarUrl } from "./data/sidecar";
+import { planPreload, ThumbPreloader } from "./data/preload";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import {
   detectObjectForSrc,
@@ -115,7 +117,9 @@ import {
   DEFAULT_LIVE_AUTO_MUTED,
   DEFAULT_LIVE_ENABLED,
   DEFAULT_MAX_MEDIA,
+  DEFAULT_PRELOAD_DAYS,
   DEFAULT_PREVIEW_CLOSE_ON_TAP_WHEN_GATED,
+  PRELOAD_CONCURRENCY,
   PTZ_SPEED_MAX,
   DEFAULT_PREVIEW_POSITION,
   DEFAULT_SOURCE_MODE,
@@ -444,6 +448,13 @@ class CameraGalleryCard extends LitElement {
     this._scrubClickBlockUntil = 0;
     this._stripScrubPointerId = null; // not _scrubPointerId: that one is the video progress bar's
     this._scrubGesture = new ScrubGesture({ onSettle: () => this._onScrubSettle() });
+    // BL-006: previews next to the files (`thumbnail_folder`) and their preloading.
+    this._sidecarMissing = new Set();
+    this._lastScrubFrame = "";
+    this._preloader = null;
+    this._preloadKey = "";
+    this._preloadTimer = 0;
+    this._onPreloadVisibility = () => this._preloader?.pump();
     this._swipeStartX = 0;
     this._swipeStartY = 0;
     this._swipeCurX = 0;
@@ -841,6 +852,7 @@ class CameraGalleryCard extends LitElement {
     window.addEventListener("keydown", this._onPtzKeyDown);
     window.addEventListener("keyup", this._onPtzKeyUp);
     document.addEventListener("visibilitychange", this._onPtzVisibilityChange);
+    document.addEventListener("visibilitychange", this._onPreloadVisibility);
     if (navigator.maxTouchPoints > 0) this._showPills(5000);
     this._startMediaPoll();
     // Idempotent — if hass isn't set yet, returns early; the firstHass branch
@@ -883,6 +895,8 @@ class CameraGalleryCard extends LitElement {
     // the camera spinning.
     this._stopPtzHold();
     document.removeEventListener("visibilitychange", this._onPtzVisibilityChange);
+    document.removeEventListener("visibilitychange", this._onPreloadVisibility);
+    this._stopPreload();
     this._cancelMicLevelRaf();
 
     this._liveQuickSwitchTimer = null;
@@ -1150,6 +1164,7 @@ class CameraGalleryCard extends LitElement {
     for (const it of items) {
       const src = String(it?.src || "");
       if (!src) continue;
+      if (this._sidecarFor(src)) continue;
       if (!this._isVideoForSrc(src)) continue;
       const pairedJpg = pairedThumbs.get(src);
       if (pairedJpg) this._posterClient.enqueue(pairedJpg);
@@ -1250,7 +1265,7 @@ class CameraGalleryCard extends LitElement {
 
       video.src = selectedUrl;
 
-      const poster = this._posterClient.getPosterUrl(selectedUrl) || "";
+      const poster = this._sidecarFor(selectedUrl) || this._posterClient.getPosterUrl(selectedUrl) || "";
       if (poster) {
         video.poster = poster;
       } else {
@@ -1295,7 +1310,7 @@ class CameraGalleryCard extends LitElement {
         video.play().catch(() => {});
       }
     } else {
-      const poster = this._posterClient.getPosterUrl(selectedUrl) || "";
+      const poster = this._sidecarFor(selectedUrl) || this._posterClient.getPosterUrl(selectedUrl) || "";
       if (poster && video.poster !== poster) {
         video.poster = poster;
       }
@@ -5066,7 +5081,10 @@ class CameraGalleryCard extends LitElement {
   /** What the viewer shows while scrubbing: the image the strip already
    * shows for that thumb (still, poster or small jpg) — never a new
    * download of a full clip. */
-  _scrubFrameUrl(idx, selectedUrl, selectedIsVideo) {
+  _scrubFrameUrl(idx, selectedUrl, selectedIsVideo, selectedSrc = selectedUrl) {
+    // BL-006: always the small preview while scrubbing, whatever the type (the full file loads on settle).
+    const preview = this._sidecarFor(selectedSrc);
+    if (preview) return preview;
     const img = this.renderRoot?.querySelector(`.tthumbs button.tthumb[data-i="${idx}"] img.timg`);
     if (img && img.complete && img.naturalWidth > 0) return img.currentSrc || img.src;
     if (!selectedIsVideo && !isGifPath(selectedUrl)) return selectedUrl;
@@ -5077,11 +5095,121 @@ class CameraGalleryCard extends LitElement {
    * newly selected clip shows its first frame at once instead of an empty
    * frame while the whole file downloads. */
   _previewStillStyle(src) {
+    const preview = this._sidecarFor(src);
+    if (preview) return this._underlayStyle(preview);
     if (this.config?.gif_thumbnails === "animated" || !isGifPath(src)) return "";
     const still = this._posterClient.getPosterUrl(src);
     if (!still) return "";
     const fit = this.config?.object_fit === "contain" ? "contain" : "cover";
     return `background-image:url("${still}");background-size:${fit};background-position:center;background-repeat:no-repeat;`;
+  }
+
+  /** BL-006: the preview of a sensor item in `thumbnail_folder`, or "" (off, not a /local/ file, or missing). */
+  _sidecarFor(src) {
+    const folder = sidecarFolder(this.config?.thumbnail_folder);
+    if (!folder || !src || this._sidecarMissing.has(src)) return "";
+    return sidecarUrl(src, folder);
+  }
+
+  /** A preview failed to load (not made yet, or unreadable): use the card's own thumbnail for that item. */
+  _onSidecarError(src) {
+    if (!src || this._sidecarMissing.has(src)) return;
+    this._sidecarMissing.add(src);
+    this.requestUpdate();
+  }
+
+  /** An image painted under the viewer's image, sized like it, until the image itself has loaded. */
+  _underlayStyle(url) {
+    if (!url) return "";
+    const fit = this.config?.object_fit === "contain" ? "contain" : "cover";
+    return `background-image:url("${url}");background-size:${fit};background-position:center;background-repeat:no-repeat;`;
+  }
+
+  _preloadEnabled() {
+    const mode = this.config?.source_mode;
+    return (
+      this.config?.preload_thumbnails === true &&
+      !!sidecarFolder(this.config?.thumbnail_folder) &&
+      (mode === "sensor" || mode === "combined")
+    );
+  }
+
+  /** Re-plan the preview preloading when the day, the items or the filters change (not on every selection). */
+  _schedulePreload(base) {
+    if (!this._preloadEnabled() || !this.isConnected) {
+      this._stopPreload();
+      return;
+    }
+    const key = [
+      this._pipeline.rev,
+      base.activeDay,
+      JSON.stringify(this._objectFilters ?? []),
+      this._filterVideo ? 1 : 0,
+      this._filterImage ? 1 : 0,
+      this._filterFavorites ? 1 : 0,
+      this.config?.preload_days,
+      this.config?.max_media,
+      this.config?.thumbnail_folder,
+    ].join("|");
+    if (key === this._preloadKey) return;
+    const first = !this._preloadKey;
+    this._preloadKey = key;
+    clearTimeout(this._preloadTimer);
+    // The first plan waits a moment so the visible tiles and the viewer go first.
+    this._preloadTimer = setTimeout(() => this._runPreloadPlan(), first ? 800 : 250);
+  }
+
+  _runPreloadPlan() {
+    this._preloadTimer = 0;
+    if (!this.isConnected || !this._preloadEnabled()) return;
+    const base = this._computeBaseList();
+    if (!base.rawItems.length) return;
+    const cap = this.config?.max_media ?? DEFAULT_MAX_MEDIA;
+    const inStrip = (src) =>
+      this._matchesTypeFilter(src) && (!this._filterFavorites || this._favorites.has(src));
+    const byDay = new Map();
+    for (const x of base.allWithDay) {
+      if (!x.dayKey) continue;
+      let arr = byDay.get(x.dayKey);
+      if (!arr) byDay.set(x.dayKey, (arr = []));
+      arr.push(x.src);
+    }
+    const itemsForDay = (day) => {
+      const srcs =
+        day === base.activeDay
+          ? base.objFiltered.map((x) => x.src)
+          : (byDay.get(day) || []).filter((src) => this._matchesObjectFilter(src));
+      return srcs.filter(inStrip).slice(0, cap);
+    };
+    const plan = planPreload({
+      days: base.days,
+      activeDay: base.activeDay,
+      selectedIndex: this._selectedIndex ?? 0,
+      neighbourDays: this.config?.preload_days ?? DEFAULT_PRELOAD_DAYS,
+      itemsForDay,
+    });
+    const entries = [];
+    for (const src of plan) {
+      const url = this._sidecarFor(src);
+      if (url) entries.push({ src, url });
+    }
+    if (!this._preloader) {
+      this._preloader = new ThumbPreloader({
+        concurrency: PRELOAD_CONCURRENCY,
+        onResult: (entry, ok) => {
+          if (!ok) this._onSidecarError(entry.src);
+        },
+      });
+    }
+    this._preloader.setQueue(entries);
+  }
+
+  /** Stop starting preloads (loads in flight finish); a reconnect plans again, skipping what loaded. */
+  _stopPreload() {
+    clearTimeout(this._preloadTimer);
+    this._preloadTimer = 0;
+    this._preloadKey = "";
+    this._preloader?.setQueue([]);
   }
 
   _onPreviewPointerUp(e, listLen) {
@@ -5518,6 +5646,8 @@ class CameraGalleryCard extends LitElement {
       // idempotent, but iterating up to ~50 items per hass push when
       // the slice is the same is wasted CPU. Gate on items rev + the
       // composition keys that drive `_computeBaseList`.
+      this._schedulePreload(base);
+
       const queueKey = `${this._pipeline.rev}|${this._selectedDay}|${this._selectedIndex}|${thumbLo}|${thumbHi}`;
       if (queueKey !== this._lastPosterQueueKey) {
         this._lastPosterQueueKey = queueKey;
@@ -5588,7 +5718,9 @@ class CameraGalleryCard extends LitElement {
               // thumbnail (paired jpg). Raw video capture is deferred
               // until the user clicks the item — see the click-path
               // in `_ensurePreviewVideoHostPlayback`.
-              if (isSensor && key && this._isVideoForSrc(key)) {
+              if (isSensor && key && this._sidecarFor(key)) {
+                // BL-006: the tile shows the server preview; nothing else to fetch.
+              } else if (isSensor && key && this._isVideoForSrc(key)) {
                 const pairedJpg = this._sensorClient.getSensorPairedThumbs().get(key);
                 if (pairedJpg) this._posterClient.enqueue(pairedJpg);
               } else if (
@@ -5954,9 +6086,17 @@ class CameraGalleryCard extends LitElement {
                 ? html`<div class="preview-empty">No media for this day.</div>`
                 : this._scrubbing
                   ? (() => {
-                      const frame = this._scrubFrameUrl(idx, selectedUrl, selectedIsVideo);
+                      const frame = this._scrubFrameUrl(idx, selectedUrl, selectedIsVideo, selected);
                       return frame
-                        ? html`<img class="pimg scrub-frame" src=${frame} alt="" />`
+                        ? html`<img
+                            class="pimg scrub-frame"
+                            src=${frame}
+                            alt=""
+                            style=${this._underlayStyle(this._lastScrubFrame !== frame ? this._lastScrubFrame : "")}
+                            @load=${() => {
+                              this._lastScrubFrame = frame;
+                            }}
+                          />`
                         : html`<div class="preview-skeleton" aria-hidden="true"></div>`;
                     })()
                 : !selectedHasUrl
@@ -6178,11 +6318,15 @@ class CameraGalleryCard extends LitElement {
                       tCls
                     );
 
-                    let poster = isVid
-                      ? this._posterClient.resolveVideoPoster(it, isMs, thumbUrl, tThumb, this._pendingPoster)
-                      : gifStills && !isMs && isGifPath(thumbUrl)
-                        ? this._posterClient.resolveGifPoster(it, this._pendingPoster)
-                        : thumbUrl;
+                    // BL-006: a preview next to the file (thumbnail_folder) is the tile for every type.
+                    const sidecar = isMs ? "" : this._sidecarFor(it.src);
+                    let poster = sidecar
+                      ? sidecar
+                      : isVid
+                        ? this._posterClient.resolveVideoPoster(it, isMs, thumbUrl, tThumb, this._pendingPoster)
+                        : gifStills && !isMs && isGifPath(thumbUrl)
+                          ? this._posterClient.resolveGifPoster(it, this._pendingPoster)
+                          : thumbUrl;
                     // For unresolved MS images, use the browse_media thumbnail as fallback
                     // so the thumbnail appears immediately while the full URL is still resolving
                     if (!isVid && !poster && isMs && tThumb) {
@@ -6277,7 +6421,10 @@ class CameraGalleryCard extends LitElement {
                               class="timg"
                               src="${poster}"
                               alt=""
-                              @error=${() => this._posterClient.onThumbImgError(poster)}
+                              @error=${() =>
+                                sidecar && poster === sidecar
+                                  ? this._onSidecarError(it.src)
+                                  : this._posterClient.onThumbImgError(poster)}
                             />`
                           : isVid && isReolinkRoot(it.src)
                             ? html`<div class="tph reolink" aria-hidden="true" title="Reolink clip">

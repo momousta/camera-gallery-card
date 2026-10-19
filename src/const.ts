@@ -365,6 +365,16 @@ export const DEFAULT_THUMBNAIL_FRAME_PCT = 0; // 0% = first frame, 100% = last f
 export const DEFAULT_GIF_THUMBNAILS = "still" satisfies GifThumbnailMode;
 /** #152: drag the thumbnail strip to scrub the main viewer (opt-in). */
 export const DEFAULT_SCRUB_ON_DRAG = false;
+/** BL-006: sensor-mode preview folder next to each file (`<dir>/<folder>/<file>.jpg`); "" = off. */
+export const DEFAULT_THUMBNAIL_FOLDER = "";
+/** BL-006: preload the previews of the active day, then of the days around it (needs `thumbnail_folder`). */
+export const DEFAULT_PRELOAD_THUMBNAILS = false;
+export const DEFAULT_PRELOAD_DAYS = 2;
+export const PRELOAD_DAYS_MIN = 0;
+export const PRELOAD_DAYS_MAX = 7;
+/** Parallel preview preloads. HA serves HTTP/1.1 (about 6 connections per host), so this leaves room for the
+ * visible tiles, the viewer and the websocket. */
+export const PRELOAD_CONCURRENCY = 3;
 export const DEFAULT_VISIBLE_OBJECT_FILTERS: readonly ObjectFilter[] = [];
 
 // -------- Inline-style fallbacks (used by render(), not styles.ts) --------

@@ -69,6 +69,11 @@ import {
   DEFAULT_THUMBNAIL_FRAME_PCT,
   DEFAULT_GIF_THUMBNAILS,
   DEFAULT_SCRUB_ON_DRAG,
+  DEFAULT_THUMBNAIL_FOLDER,
+  DEFAULT_PRELOAD_THUMBNAILS,
+  DEFAULT_PRELOAD_DAYS,
+  PRELOAD_DAYS_MIN,
+  PRELOAD_DAYS_MAX,
   DEFAULT_LIVE_LAYOUT,
   LIVE_LAYOUTS,
   MIC_MODES,
@@ -508,6 +513,11 @@ export const cameraGalleryCardConfigStruct = type({
   gif_thumbnails: defaulted(enums(GIF_THUMBNAIL_MODES), DEFAULT_GIF_THUMBNAILS),
   // #152: press and drag the thumbnail strip to scrub the main viewer.
   scrub_on_drag: defaulted(boolean(), DEFAULT_SCRUB_ON_DRAG),
+  // BL-006: small previews next to the files (e.g. made by the Gallery Thumbnails add-on), used for the strip,
+  // the frames shown while scrubbing and preloading. Missing previews fall back to the files themselves.
+  thumbnail_folder: defaulted(string(), DEFAULT_THUMBNAIL_FOLDER),
+  preload_thumbnails: defaulted(boolean(), DEFAULT_PRELOAD_THUMBNAILS),
+  preload_days: defaulted(intInRange(PRELOAD_DAYS_MIN, PRELOAD_DAYS_MAX), DEFAULT_PRELOAD_DAYS),
   pill_size: defaulted(intInRange(PILL_SIZE_MIN, PILL_SIZE_MAX), PILL_SIZE_DEFAULT),
   row_gap: defaulted(intInRange(ROW_GAP_MIN, ROW_GAP_MAX), ROW_GAP_DEFAULT),
   card_height: defaulted(intInRange(CARD_HEIGHT_MIN, CARD_HEIGHT_MAX), CARD_HEIGHT_DEFAULT),

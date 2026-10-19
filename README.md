@@ -169,6 +169,7 @@ A few notes on the generic walker:
 - Sensor mode: first-frame capture
 - Sensor mode GIF clips: a still first frame by default (`gif_thumbnails: still`). The card fetches only the head of each GIF with an HTTP `Range` request (typically 5–20 % of the file), and caches the still in IndexedDB, so a second visit needs no download at all. `gif_thumbnails: animated` loads and animates the whole GIF in every tile, as before
 - **Drag to scrub** (`scrub_on_drag: true`): press and drag the thumbnail strip; the viewer follows the thumb under the centre line (Ring / iOS Photos style). While you drag, the viewer shows the thumbnail; the clip loads, and a video plays, when you let go. A tap still selects; mouse drag and the mouse wheel scrub too
+- **Previews next to the files** (`thumbnail_folder: thumbs`): the strip and scrubbing use small JPEG previews (10–30 KB) instead of the clips and photos themselves; the full file loads when you stop on it. With `preload_thumbnails: true` the day's previews, then the neighbouring days', load in the background, so scrolling never waits
 - **Paired image + video** — when a snapshot and clip share the same filename stem they're shown as one item, with the image used as the thumbnail
 
 ### Video controls
@@ -300,6 +301,9 @@ Then in the card editor: **General → Delete services → Frigate** → pick `r
 | `thumb_sort_order` | `newest_first` or `oldest_first` |
 | `gif_thumbnails` | Sensor-mode GIF tiles: `still` (default; cached first frame from a small `Range` request) or `animated` (whole GIF per tile) |
 | `scrub_on_drag` | Drag the horizontal thumbnail strip to scrub the viewer; clips load on release (default `false`) |
+| `thumbnail_folder` | Sensor mode: a folder next to each file holding small previews named `<file name>.jpg` (e.g. `thumbs` → `/local/cam/thumbs/clip.gif.jpg`, made by a thumbnailer). Used for the strip, the frames shown while scrubbing (the full file loads when you stop), as the placeholder under the full file and as video posters. A missing preview falls back to the file itself (default off) |
+| `preload_thumbnails` | With `thumbnail_folder`: preload the previews of the whole day, nearest the selection first, then of the days around it (default `false`) |
+| `preload_days` | Days on each side of the shown day to preload, 0–7 (default `2`) |
 | `bar_position` | Preview timestamp bar position |
 | `bar_opacity` | Preview timestamp bar opacity |
 | **Live view** | |
