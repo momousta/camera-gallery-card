@@ -45,6 +45,8 @@ import { planPreload, ThumbPreloader } from "./data/preload";
 import { monthOf } from "./data/calendar";
 import { renderCalendarPicker } from "./ui/calendar-picker";
 import { calendarPickerStyles } from "./ui/calendar-picker-styles";
+// BL-007: the multi-camera timeline card ships in the same bundle (<camera-timeline-card>).
+import "./timeline/timeline-card.js";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import {
   detectObjectForSrc,

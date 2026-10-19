@@ -42,6 +42,15 @@ export default {
           'name: "Camera Gallery Card",': `name: "Camera Gallery Card (${suffix.slice(1)} test)",`,
         },
       }),
+    suffix &&
+      replace({
+        preventAssignment: false,
+        delimiters: ["", ""],
+        include: ["src/timeline/timeline-card.js"],
+        values: {
+          'const TAG = "camera-timeline-card";': `const TAG = "camera-timeline-card${suffix}";`,
+        },
+      }),
     nodeResolve({ browser: true, extensions: [".js", ".ts", ".mjs"] }),
     commonjs(),
     typescript({
