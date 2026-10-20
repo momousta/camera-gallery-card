@@ -33,7 +33,7 @@ import { DEFAULT_NVR_ADDON, NVR_STREAM_LABEL, NVR_STREAMS, nvrChannelOf } from "
 import "../nvr/nvr-player.js";
 import { ThumbPreloader } from "../data/preload";
 import { sidecarFolder, sidecarUrl } from "../data/sidecar";
-import { renderCalendarPicker } from "../ui/calendar-picker";
+import { OutsidePress, renderCalendarPicker } from "../ui/calendar-picker";
 import { calendarPickerStyles } from "../ui/calendar-picker-styles";
 import { formatDay, formatTimeFromMs } from "../util/locale";
 import {
@@ -120,6 +120,11 @@ export class CameraTimelineCard extends LitElement {
     this._overlay = null;
     this._calOpen = false;
     this._calMonth = "";
+    // A press anywhere outside the open calendar closes it.
+    this._calOutside = new OutsidePress(
+      () => this.renderRoot,
+      () => (this._calOpen = false)
+    );
     this._half = 0;
     this._rev = 0;
     this._needsScrollSync = true;
@@ -186,6 +191,7 @@ export class CameraTimelineCard extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this._calOutside.stop();
     document.removeEventListener("visibilitychange", this._onVisibility);
     this._pause();
     if (this._scrollRaf) cancelAnimationFrame(this._scrollRaf);
@@ -825,6 +831,7 @@ export class CameraTimelineCard extends LitElement {
   }
 
   updated() {
+    this._calOutside.sync(this._calOpen);
     const el = this._scroller();
     if (!el) return;
     if (!this._resizeObserver && typeof ResizeObserver !== "undefined") {

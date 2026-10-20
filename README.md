@@ -170,7 +170,7 @@ A few notes on the generic walker:
 - Sensor mode GIF clips: a still first frame by default (`gif_thumbnails: still`). The card fetches only the head of each GIF with an HTTP `Range` request (typically 5–20 % of the file), and caches the still in IndexedDB, so a second visit needs no download at all. `gif_thumbnails: animated` loads and animates the whole GIF in every tile, as before
 - **Drag to scrub** (`scrub_on_drag: true`): press and drag the thumbnail strip; the viewer follows the thumb under the centre line (Ring / iOS Photos style). While you drag, the viewer shows the thumbnail; the clip loads, and a video plays, when you let go. A tap still selects; mouse drag and the mouse wheel scrub too
 - **Previews next to the files** (`thumbnail_folder: thumbs`): the strip and scrubbing use small JPEG previews (10–30 KB) instead of the clips and photos themselves; the full file loads when you stop on it. With `preload_thumbnails: true` the day's previews, then the neighbouring days', load in the background, so scrolling never waits
-- **Calendar**: tap the date to pick a day from a month calendar; days with media are highlighted, the others can't be picked
+- **Calendar**: tap the date to pick a day from a month calendar; days with media are highlighted, the others can't be picked. A tap anywhere outside it closes it
 - **Paired image + video** — when a snapshot and clip share the same filename stem they're shown as one item, with the image used as the thumbnail
 
 ### NVR recordings (owner fork)
@@ -201,10 +201,10 @@ the selected item's moment:
 
 **Swiping between cameras** (`swipe_cameras`): a swipe left / right on the picture opens the next / previous
 camera of the list at the same moment, replacing the page (Back goes where you came from). It works anywhere on
-the picture, also starting on the chevrons (a tap on them still steps through the snapshots), and in the
-gallery's image full screen. While a recording plays, that camera plays its recording from the moment on screen,
-in the same quality. Otherwise it shows its snapshot closest to the moment. Full screen (the player's or the
-image's) stays full screen. A camera without `nvr_channel` (a doorbell) shows
+the picture, also starting on the chevrons (a tap on them still steps through the snapshots), slowly (up to 5 s)
+or slanted (up to 45°), and in the gallery's image full screen. While a recording plays, that camera plays its
+recording from the moment on screen, in the same quality. Otherwise it shows its snapshot closest to the moment.
+Full screen (the player's or the image's) stays full screen. A camera without `nvr_channel` (a doorbell) shows
 its closest snapshot, and swiping on from it streams again. The list has the timeline card's `cameras` shape
 (`gallery_id` = each gallery's `url_id`, `navigation_path` = its page), so one YAML anchor serves both. The
 timeline's full view swipes between its cameras the same way.
@@ -214,6 +214,12 @@ bundle), so it has the same controls and gestures, with that card's own Low / Hi
 
 The gallery's own full screen (the image button) does the same for a landscape snapshot or GIF: turned on a
 portrait screen, with pinch zoom and panning following the finger.
+
+**Cameras mounted sideways** (a portrait picture): the NVR records the sensor's landscape frame. The add-on's
+`rotate_channels` option (NVR Playback 0.4.1+) says how far to turn a channel. The player then shows it upright,
+in a portrait box, and keeps full screen portrait. Saved snapshots are upright, and saved clips carry the turn,
+as phones write it. For that camera's snapshots and GIFs, `gallery_aspect_ratio: "3:4"` with `gallery_fit:
+contain` shows the whole picture.
 
 With `scrub_on_drag`, scrolling the strip and letting it come to rest plays the Low stream of the moment it rests
 on, quietly: nothing shows while it loads, and the video replaces the snapshot once it plays (about a second). A
@@ -407,6 +413,10 @@ data:
 | `nvr_addon` | That add-on's slug (default `local_nvr_playback`) |
 | `nvr_autoplay` | With `scrub_on_drag`, letting the scrolled strip come to rest plays the Low stream of that moment, quietly (default `true`) |
 | `swipe_cameras` | The cameras in order, as the timeline card's `cameras` (`gallery_id`, `navigation_path`, `name`): a swipe on the picture opens the next / previous one at the same moment. `name` names saved files. This card must be in the list (its `url_id`) |
+| `gallery_aspect_ratio` | The viewer's shape in the gallery only (not live), as `W:H`, e.g. `"3:4"` for a camera mounted sideways (default: `aspect_ratio`) |
+| `gallery_fit` | `cover` or `contain` for the gallery's snapshots and GIFs only; thumbnails and live keep `object_fit` (default: `object_fit`) |
+| `gallery_chevrons_enabled` | The previous / next arrows over the gallery's picture, also in its full screen (default `true`) |
+| `gallery_pills` | Per-pill settings, e.g. `index_counter: {enabled: false}` hides the "3 / 40" count |
 | `bar_position` | Preview timestamp bar position |
 | `bar_opacity` | Preview timestamp bar opacity |
 | **Live view** | |

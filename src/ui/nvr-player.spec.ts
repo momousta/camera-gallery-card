@@ -929,13 +929,35 @@ describe("<cgc-nvr-player>", () => {
     });
 
     describe("a swipe along the picture", () => {
-      const swipe = async (el: any, from: [number, number], to: [number, number]) => {
+      /** A touch event (jsdom has no Touch): `fingers` on the screen at its start. */
+      const tev = (type: string, x: number, y: number, fingers = 1): any => {
+        const e: any = new Event(type, { bubbles: true, composed: true, cancelable: true });
+        const t = { clientX: x, clientY: y };
+        Object.defineProperty(e, "touches", {
+          value: type === "touchend" ? [] : Array(fingers).fill(t),
+        });
+        Object.defineProperty(e, "changedTouches", { value: [t] });
+        return e;
+      };
+      /** A finger's swipe, as the browser sends it: pointer and touch events. `cancel`: the browser took the
+       * gesture to pan after the first move (pointercancel); the touch events go on. */
+      const swipe = async (
+        el: any,
+        from: [number, number],
+        to: [number, number],
+        { on = ".nvr-tap", cancel = false } = {}
+      ) => {
         const id = nextId++;
-        const tap = q(el, ".nvr-tap");
-        tap.dispatchEvent(ptr("pointerdown", id, ...from));
-        tap.dispatchEvent(ptr("pointermove", id, (from[0] + to[0]) / 2, (from[1] + to[1]) / 2));
-        tap.dispatchEvent(ptr("pointermove", id, ...to));
-        tap.dispatchEvent(ptr("pointerup", id, ...to));
+        const target = q(el, on);
+        target.dispatchEvent(ptr("pointerdown", id, ...from));
+        target.dispatchEvent(tev("touchstart", ...from));
+        target.dispatchEvent(ptr("pointermove", id, (from[0] + to[0]) / 2, (from[1] + to[1]) / 2));
+        if (cancel) target.dispatchEvent(ptr("pointercancel", id, 0, 0));
+        else {
+          target.dispatchEvent(ptr("pointermove", id, ...to));
+          target.dispatchEvent(ptr("pointerup", id, ...to));
+        }
+        target.dispatchEvent(tev("touchend", ...to));
         await el.updateComplete;
       };
       const listen = (el: any, handled = false) => {
@@ -966,6 +988,60 @@ describe("<cgc-nvr-player>", () => {
         expect(el._zoom.x).toBeLessThan(0);
       });
 
+      it("counts a swipe the browser began to pan, one up to 45 degrees off, and a slow one", async () => {
+        const { el } = await playing();
+        layout(el);
+        const got = listen(el);
+        await swipe(el, [300, 100], [140, 120], { cancel: true }); // the pointer cancelled: the touch decides
+        await swipe(el, [300, 60], [150, 180]); // 39 degrees down
+        expect(got.map((d) => d.dir)).toEqual([1, 1]);
+        await swipe(el, [300, 60], [180, 200]); // steeper than 45 degrees: no
+        expect(got).toHaveLength(2);
+      });
+
+      it("works over the loading and error screens, not from the seek bar, not with two fingers", async () => {
+        installFetch((url) => (url === `${BASE}api/play` ? undefined : undefined)); // the add-on never answers
+        const el = await mount();
+        layout(el);
+        const got = listen(el);
+        await swipe(el, [300, 100], [140, 100], { on: ".nvr-wait" });
+        expect(got).toEqual([{ dir: 1, time: T, stream: "sub", fullscreen: false }]);
+
+        const p = await playing();
+        layout(p.el);
+        const got2 = listen(p.el);
+        await swipe(p.el, [100, 200], [300, 200], { on: ".nvr-seek" });
+        const tap = q(p.el, ".nvr-tap");
+        tap.dispatchEvent(tev("touchstart", 300, 100));
+        tap.dispatchEvent(tev("touchstart", 300, 100, 2)); // a second finger: a pinch
+        tap.dispatchEvent(tev("touchend", 120, 100));
+        expect(got2).toEqual([]);
+      });
+
+      it("a mouse drags it too", async () => {
+        const { el } = await playing();
+        layout(el);
+        const got = listen(el);
+        const m = (type: string, x: number): any => {
+          const e: any = new MouseEvent(type, {
+            bubbles: true,
+            composed: true,
+            clientX: x,
+            clientY: 100,
+            button: 0,
+          });
+          Object.defineProperty(e, "pointerId", { value: 77 });
+          Object.defineProperty(e, "pointerType", { value: "mouse" });
+          return e;
+        };
+        const tap = q(el, ".nvr-tap");
+        tap.dispatchEvent(m("pointerdown", 320));
+        tap.dispatchEvent(m("pointermove", 250));
+        tap.dispatchEvent(m("pointermove", 120));
+        tap.dispatchEvent(m("pointerup", 120));
+        expect(got.map((d) => d.dir)).toEqual([1]);
+      });
+
       it("follows the turned picture in full screen, and a handled swipe saves the clip being recorded", async () => {
         const { el, v, state } = await playing({}, (url) =>
           url === `${BASE}api/clip`
@@ -993,6 +1069,73 @@ describe("<cgc-nvr-player>", () => {
         await flush();
         expect(el._rec).toBeNull();
         expect(calls.some((c) => c.url === `${BASE}api/clip/c9/stop`)).toBe(true);
+      });
+    });
+
+    describe("a camera on its side (the add-on's rotate)", () => {
+      it("turns the video upright, its zoom and full screen follow, and its snapshot stands upright", async () => {
+        installFetch((url) =>
+          url.startsWith(`${BASE}api/save?`)
+            ? { status: 200, body: { url: "export/k/x.jpg", file: "x.jpg" } }
+            : undefined
+        );
+        const base = happyRoute({ engine: "replay", state: "streaming", rotate: 90 });
+        calls = installFetch((u, i) =>
+          u.startsWith(`${BASE}api/save?`)
+            ? { status: 200, body: { url: "export/k/x.jpg", file: "x.jpg" } }
+            : base(u, i)
+        );
+        const el = await mount();
+        await flush(200);
+        const v: any = video(el);
+        Object.defineProperty(v, "paused", { configurable: true, get: () => false });
+        Object.defineProperty(v, "currentTime", { configurable: true, get: () => 753 });
+        Object.defineProperty(v, "videoWidth", { configurable: true, get: () => 896 });
+        Object.defineProperty(v, "videoHeight", { configurable: true, get: () => 512 });
+        v.dispatchEvent(new Event("playing"));
+        await el.updateComplete;
+        expect(el.shadowRoot.querySelector(".nvr").classList.contains("portrait")).toBe(true);
+        expect(v.classList.contains("quarter")).toBe(true);
+        expect(v.getAttribute("style")).toBe("transform:translate(-50%,-50%) rotate(90deg)");
+        el._setZoom(2, 0, 0);
+        await el.updateComplete;
+        expect(v.getAttribute("style")).toBe(
+          "transform:translate(-50%,-50%) translate(0px,0px) scale(2) rotate(90deg)"
+        );
+        el._resetZoom();
+        // Full screen on a portrait screen: a portrait picture isn't turned to landscape.
+        vi.stubGlobal("matchMedia", (m: string) => ({ matches: m.includes("portrait") }));
+        el._fullscreen = true;
+        expect(el._turn()).toBe(0);
+        // The snapshot: the canvas is the turned size, drawn turned a quarter clockwise.
+        const ctx = {
+          drawImage: vi.fn(),
+          translate: vi.fn(),
+          rotate: vi.fn(),
+          getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(256).fill(40) })),
+        };
+        const sizes: number[][] = [];
+        vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (
+          this: HTMLCanvasElement
+        ) {
+          sizes.push([this.width, this.height]);
+          return ctx as any;
+        });
+        vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(function (cb: any) {
+          cb(new Blob(["jpeg"], { type: "image/jpeg" }));
+        });
+        vi.spyOn(HTMLAnchorElement.prototype, "dispatchEvent").mockReturnValue(true);
+        await el._snapshot();
+        expect(sizes[0]).toEqual([512, 896]);
+        expect(ctx.rotate).toHaveBeenCalledWith(Math.PI / 2);
+        expect(ctx.drawImage).toHaveBeenCalledWith(v, -448, -256, 896, 512);
+      });
+
+      it("a picture the add-on doesn't turn stays as it is", async () => {
+        const { el, v } = await playing();
+        expect(el.shadowRoot.querySelector(".nvr").classList.contains("portrait")).toBe(false);
+        expect(v.classList.contains("quarter")).toBe(false);
+        expect(v.getAttribute("style")).toBe("");
       });
     });
 

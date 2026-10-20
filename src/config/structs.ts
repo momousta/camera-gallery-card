@@ -545,6 +545,10 @@ export const cameraGalleryCardConfigStruct = type({
   // Owner fork: the cameras in order (each `gallery_id` = a gallery's `url_id`, `navigation_path` = its page). A
   // swipe on the picture goes to the next / previous one at the same moment (streaming on when it was).
   swipe_cameras: optional(array(swipeCameraEntry)),
+  // Owner fork: the gallery's picture box ("3:4", "9:16", …; live keeps aspect_ratio) and how the picture fits it
+  // (thumbnails and live keep object_fit). For cameras mounted on their side, whose pictures stand portrait.
+  gallery_aspect_ratio: optional(string()),
+  gallery_fit: optional(enums(["cover", "contain"])),
   pill_size: defaulted(intInRange(PILL_SIZE_MIN, PILL_SIZE_MAX), PILL_SIZE_DEFAULT),
   row_gap: defaulted(intInRange(ROW_GAP_MIN, ROW_GAP_MAX), ROW_GAP_DEFAULT),
   card_height: defaulted(intInRange(CARD_HEIGHT_MIN, CARD_HEIGHT_MAX), CARD_HEIGHT_DEFAULT),

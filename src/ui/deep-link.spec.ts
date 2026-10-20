@@ -526,3 +526,157 @@ describe("swiping between cameras (owner fork)", () => {
     expect(card._selectedIndex).toBe(1);
   });
 });
+
+describe("owner 10-20 13:08: touch swipes, no arrows or count, portrait cameras, the calendar", () => {
+  const CAMS = [
+    {
+      name: "Front Right",
+      navigation_path: "/main-dashboard/front-right",
+      gallery_id: "front_right",
+    },
+    { name: "Front", navigation_path: "/main-dashboard/camera1", gallery_id: "camera1" },
+  ];
+  let moves: string[] = [];
+  const onMove = () => moves.push(window.location.pathname + window.location.search);
+  beforeEach(() => {
+    moves = [];
+    window.addEventListener("location-changed", onMove);
+  });
+  afterEach(() => window.removeEventListener("location-changed", onMove));
+
+  const tev = (type: string, x: number, y: number, fingers = 1): any => {
+    const e: any = new Event(type, { bubbles: true, composed: true, cancelable: true });
+    const t = { clientX: x, clientY: y };
+    Object.defineProperty(e, "touches", {
+      value: type === "touchend" ? [] : Array(fingers).fill(t),
+    });
+    Object.defineProperty(e, "changedTouches", { value: [t] });
+    return e;
+  };
+  const pev = (type: string, x: number, y: number): any => {
+    const e: any = new MouseEvent(type, {
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+    });
+    Object.defineProperty(e, "pointerType", { value: "touch" });
+    Object.defineProperty(e, "pointerId", { value: 5 });
+    return e;
+  };
+  /** A finger on the preview (or one of its children), as the browser sends it. */
+  async function fingerSwipe(
+    card: any,
+    from: [number, number],
+    to: [number, number],
+    { on = "", cancel = false } = {}
+  ) {
+    const preview = card.shadowRoot.querySelector(".preview");
+    const target = on ? preview.querySelector(on) : preview;
+    target.dispatchEvent(pev("pointerdown", ...from));
+    target.dispatchEvent(tev("touchstart", ...from));
+    target.dispatchEvent(pev("pointermove", (from[0] + to[0]) / 2, (from[1] + to[1]) / 2));
+    if (cancel) target.dispatchEvent(pev("pointercancel", 0, 0));
+    else target.dispatchEvent(pev("pointerup", ...to));
+    target.dispatchEvent(tev("touchend", ...to));
+    await card.updateComplete;
+  }
+  async function gallery(options: Record<string, unknown> = {}) {
+    link({ cgc_id: "front_right", cgc_view: "gallery", cgc_src: ITEMS[1]!.src });
+    const card = makeCard({ swipe_cameras: CAMS, ...options });
+    await show(card);
+    return card;
+  }
+
+  it("a finger's swipe moves on even when the browser cancelled its pointer; once, not twice", async () => {
+    const card = await gallery();
+    await fingerSwipe(card, [300, 120], [120, 140], { cancel: true });
+    expect(moves).toHaveLength(1);
+    expect(moves[0]).toContain("/main-dashboard/camera1?");
+    window.history.replaceState(null, "", "/main-dashboard/front-right");
+    await fingerSwipe(card, [300, 120], [120, 120]); // pointerup and touchend both arrive: one move
+    expect(moves).toHaveLength(2);
+  });
+
+  it("from a pill (they stop the pointer), not up or down, not in live", async () => {
+    const card = await gallery({ persistent_controls: true });
+    const pill = card.shadowRoot.querySelector(".preview .gallery-pill");
+    expect(pill).not.toBeNull();
+    await fingerSwipe(card, [300, 20], [120, 30], { on: ".gallery-pill" });
+    expect(moves).toHaveLength(1);
+    await fingerSwipe(card, [200, 40], [230, 200]); // mostly down
+    expect(moves).toHaveLength(1);
+    card._setViewMode("live");
+    await card.updateComplete;
+    await fingerSwipe(card, [300, 120], [120, 120]);
+    expect(moves).toHaveLength(1);
+  });
+
+  it("without swipe_cameras a finger still steps through the snapshots", async () => {
+    link({ cgc_id: "front_right", cgc_view: "gallery", cgc_src: ITEMS[0]!.src });
+    const card = makeCard();
+    await show(card);
+    await fingerSwipe(card, [300, 120], [120, 120], { cancel: true });
+    expect(moves).toEqual([]);
+    expect(card._selectedIndex).toBe(1);
+  });
+
+  it("a zoom reset keeps the preview's pan-y (blanking it gave the browser every swipe)", async () => {
+    const card = await gallery();
+    const preview = card.shadowRoot.querySelector(".preview");
+    card._zoomScale = 2;
+    card._applyZoom();
+    card._resetZoom();
+    expect(preview.style.touchAction).toBe("pan-y");
+    card._setViewMode("live");
+    await card.updateComplete;
+    card._resetZoom();
+    expect(preview.style.touchAction).toBe("auto");
+  });
+
+  it("no arrows (also full screen) with gallery_chevrons_enabled: false; no count with index_counter off", async () => {
+    const card = await gallery({
+      persistent_controls: true,
+      gallery_chevrons_enabled: false,
+      gallery_pills: { index_counter: { enabled: false } },
+    });
+    expect(card.shadowRoot.querySelector(".preview .pnavbtn")).toBeNull();
+    expect(card.shadowRoot.querySelector(".preview").textContent).not.toMatch(/\d+\s*\/\s*\d+/);
+    card._openImageFullscreen();
+    await card.updateComplete;
+    expect(card.shadowRoot.querySelector(".img-fs-overlay")).not.toBeNull();
+    expect(card.shadowRoot.querySelector(".img-fs-overlay .pnavbtn")).toBeNull();
+  });
+
+  it("a portrait camera: a 3:4 gallery picture shown whole; live keeps its box and fit", async () => {
+    const card = await gallery({ gallery_aspect_ratio: "3:4", gallery_fit: "contain" });
+    const style = () => card.shadowRoot.querySelector(".preview").getAttribute("style");
+    expect(style()).toContain("aspect-ratio:3/4");
+    expect(style()).toContain("--cgc-object-fit:contain");
+    expect(card._underlayStyle("/local/still.jpg")).toContain("background-size:contain");
+    card._setViewMode("live");
+    await card.updateComplete;
+    expect(style()).toContain("aspect-ratio:16/9");
+    expect(style()).not.toContain("--cgc-object-fit");
+    const plain = await gallery({ gallery_aspect_ratio: "wide" });
+    expect(plain.shadowRoot.querySelector(".preview").getAttribute("style")).toContain(
+      "aspect-ratio:16/9"
+    );
+  });
+
+  it("a press anywhere outside the open calendar closes it", async () => {
+    const card = await gallery();
+    card._openDatePicker(DAYS);
+    await card.updateComplete;
+    const picker = card.shadowRoot.querySelector(".cal-picker");
+    expect(picker).not.toBeNull();
+    picker.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
+    await card.updateComplete;
+    expect(card._showDatePicker).toBe(true); // inside: stays
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
+    await card.updateComplete;
+    expect(card._showDatePicker).toBe(false);
+    expect(card.shadowRoot.querySelector(".cal-picker")).toBeNull();
+  });
+});

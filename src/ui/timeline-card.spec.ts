@@ -473,3 +473,22 @@ describe("swiping between cameras in the full view (owner fork)", () => {
     expect(card._overlay.ci).toBe(0);
   });
 });
+
+describe("the calendar (owner 10-20)", () => {
+  it("a press anywhere outside it closes it; inside, it stays", async () => {
+    const card = await render();
+    card._openCalendar();
+    await card.updateComplete;
+    const picker = $(card, ".cal-picker");
+    expect(picker).not.toBeNull();
+    picker.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
+    await card.updateComplete;
+    expect(card._calOpen).toBe(true);
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
+    await card.updateComplete;
+    expect(card._calOpen).toBe(false);
+    expect($(card, ".cal-picker")).toBeNull();
+    card.remove(); // and it stops listening with the card gone
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
+  });
+});

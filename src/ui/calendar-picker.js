@@ -12,6 +12,38 @@ import { dayKeyFromMs } from "../data/datetime-parsing";
 import { formatDay, formatMonth } from "../util/locale";
 
 /**
+ * While a card's calendar is open, a press anywhere else on the page closes it: outside the card too (the backdrop
+ * only covers the card). Call `sync(open)` after each render and `stop()` when the card leaves the page.
+ */
+export class OutsidePress {
+  /** @param {() => ParentNode | null | undefined} root  the card's render root
+   *  @param {() => void} onPress */
+  constructor(root, onPress) {
+    this._root = root;
+    this._onPress = onPress;
+    this._on = false;
+    this._handler = (e) => {
+      const picker = this._root()?.querySelector?.(".cal-picker");
+      if (picker && !(e.composedPath?.() || []).includes(picker)) this._onPress();
+    };
+  }
+
+  sync(open) {
+    if (open && !this._on) {
+      document.addEventListener("pointerdown", this._handler, true);
+      this._on = true;
+    } else if (!open && this._on) {
+      this.stop();
+    }
+  }
+
+  stop() {
+    document.removeEventListener("pointerdown", this._handler, true);
+    this._on = false;
+  }
+}
+
+/**
  * The month calendar both cards open from their date (BL-006, BL-007). Days in `days` can be picked, the others
  * are greyed out; the arrows move between the months that have days. Style it with `calendarPickerStyles`.
  *

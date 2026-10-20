@@ -27,6 +27,7 @@ export const nvrPlayerStyles = css`
   }
   .nvr-stage {
     overflow: hidden; /* a zoomed picture stays in its frame */
+    container-type: size; /* its width / height for a quarter-turned picture (cqw / cqh) */
   }
   .nvr.fs {
     background: #000;
@@ -34,7 +35,7 @@ export const nvrPlayerStyles = css`
   /* Full screen on a portrait screen (an app's WebView can't turn the screen): turn the picture, so it is
      landscape with the phone held sideways. A landscape screen (turned by Chrome, or by the phone) needs nothing. */
   @media (orientation: portrait) {
-    .nvr.fs .nvr-stage {
+    .nvr.fs:not(.portrait) .nvr-stage {
       inset: auto;
       top: 50%;
       left: 50%;
@@ -53,6 +54,15 @@ export const nvrPlayerStyles = css`
     object-fit: contain;
     background: #000;
     transform-origin: center center;
+  }
+  /* A camera on its side (the add-on's turn for its channel): the video's box is the stage's, swapped, and its
+     transform (render) centres and turns it, so it stands upright and fills the stage. */
+  .nvr-video.quarter {
+    inset: auto;
+    left: 50%;
+    top: 50%;
+    width: 100cqh;
+    height: 100cqw;
   }
   /* Taps, double taps (skip), pinch zoom and, zoomed, panning: the page may still scroll vertically over the
      picture, except full screen or zoomed. */

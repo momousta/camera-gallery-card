@@ -64,7 +64,7 @@ const SKIP_S = 10; // a double tap on a side: back or forward this much
 const STREAK_MS = 800; // after a double tap, each tap on the same side within this skips again
 const MAX_ZOOM = 8;
 const SWIPE_MIN_PX = 50; // a horizontal swipe on the picture: at least this far (and 12 % of its width)
-const SWIPE_MS = 900; // and no slower
+const SWIPE_MS = 5000; // and no slower (a slow drag across the picture means the same)
 const TOAST_MS = 2600;
 
 let session = new IngressSession();
@@ -160,12 +160,23 @@ function recordedSeconds(rec) {
   return rec.ranges.reduce((n, [a, b]) => n + Math.max(0, b - a), 0);
 }
 
-/** The frame on screen as a JPEG at the video's own size; null when the device hands over only black. */
-async function frameJpeg(video) {
+/** The frame on screen as a JPEG at the video's own size, turned upright by `rot` (degrees clockwise); null when
+ * the device hands over only black. */
+async function frameJpeg(video, rot = 0) {
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  const quarter = rot === 90 || rot === 270;
   const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.width = quarter ? h : w;
+  canvas.height = quarter ? w : h;
+  const ctx = canvas.getContext("2d");
+  if (rot) {
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate((rot * Math.PI) / 180);
+    ctx.drawImage(video, -w / 2, -h / 2, w, h);
+  } else {
+    ctx.drawImage(video, 0, 0, w, h);
+  }
   if (blankFrame(video)) return null;
   return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
 }
@@ -405,6 +416,10 @@ export class CgcNvrPlayer extends LitElement {
     if (run !== this._run) return;
     this._status = st;
     this._phase = "fetching";
+    if (this._fullscreen && this._locked && this._portraitContent()) {
+      // Locked to landscape before the channel's turn was known (a swipe arrived here full screen).
+      screen.orientation?.lock?.("portrait").catch(() => {});
+    }
     const mode = this._mode();
     while (!st.ready) {
       if (st.state === "error")
@@ -776,17 +791,50 @@ export class CgcNvrPlayer extends LitElement {
       return;
     }
     if (!this._ptrs.size) this._gest = null;
-    if (g.moved && !g.afterPinch && this._zoom.s <= 1 && e.type !== "pointercancel") {
-      // Not zoomed, a finger moving along the picture (in its own frame, turned or not) is a swipe.
-      const f = this._frame();
-      const [fx, fy] = unturn(e.clientX - g.x0, e.clientY - g.y0, this._turn());
-      const far = Math.abs(fx) >= Math.max(SWIPE_MIN_PX, (f?.w || 0) * 0.12);
-      if (far && Math.abs(fx) > 1.5 * Math.abs(fy) && performance.now() - g.t0 < SWIPE_MS)
-        this._swipe(fx < 0 ? 1 : -1);
+    if (g.moved) {
+      // A mouse drag along the picture is a swipe; a finger's is read from the touch events (_touchUp).
+      if (
+        e.pointerType === "mouse" &&
+        !g.afterPinch &&
+        this._zoom.s <= 1 &&
+        e.type !== "pointercancel"
+      )
+        this._swipeIf(e.clientX - g.x0, e.clientY - g.y0, performance.now() - g.t0);
       return;
     }
     if (e.type === "pointercancel" || g.moved || performance.now() - g.t0 > 500) return;
     this._tapAt(e.clientX, e.clientY);
+  }
+
+  /** One finger on the player (anywhere: the picture, the loading or error screen), not on the seek bar. Touches
+   * stay the player's (the host's own gestures never see them). */
+  _touchDown(e) {
+    e.stopPropagation();
+    this._tSwipe = null;
+    if (e.touches?.length !== 1 || this._zoom.s > 1) return;
+    if ((e.composedPath?.() || []).some((n) => n?.classList?.contains("nvr-seek"))) return;
+    const t = e.touches[0];
+    this._tSwipe = { x: t.clientX, y: t.clientY, t: performance.now() };
+  }
+
+  /** The finger left: a swipe when it moved along the picture. From the touch events, start to end: the browser
+   * cancels the pointer of a swipe it began to pan (one starting a little up or down), the touch goes on. */
+  _touchUp(e) {
+    e.stopPropagation();
+    const g = this._tSwipe;
+    this._tSwipe = null;
+    const t = e.changedTouches?.[0];
+    if (!g || !t || e.touches?.length || this._zoom.s > 1) return;
+    this._swipeIf(t.clientX - g.x, t.clientY - g.y, performance.now() - g.t);
+  }
+
+  /** A move of (dx, dy) on the screen over ms: a swipe when it runs along the picture (its own frame, turned or
+   * not), far enough, within 45 degrees, and within SWIPE_MS. */
+  _swipeIf(dx, dy, ms) {
+    const f = this._frame();
+    const [fx, fy] = unturn(dx, dy, this._turn());
+    const far = Math.abs(fx) >= Math.max(SWIPE_MIN_PX, (f?.w || 0) * 0.12);
+    if (far && Math.abs(fx) > Math.abs(fy) && ms < SWIPE_MS) this._swipe(fx < 0 ? 1 : -1);
   }
 
   /** -1 / 1: the left / right side of the picture (in its own frame); 0: the middle fifth. */
@@ -887,9 +935,23 @@ export class CgcNvrPlayer extends LitElement {
     this._showUi();
   }
 
-  /** How far the picture is turned (degrees): full screen on a portrait screen (see the styles). */
+  /** How far the picture is turned (degrees): full screen on a portrait screen (see the styles); never for a
+   * picture that stands portrait (it fits a portrait screen as it is). */
   _turn() {
-    return this._fullscreen && portraitScreen() ? this._rot : 0;
+    return this._fullscreen && portraitScreen() && !this._portraitContent() ? this._rot : 0;
+  }
+
+  /** How far (clockwise) the NVR's picture is turned to stand upright: the add-on's setting for the channel (a
+   * camera mounted on its side, owner 10-20). 0, 90, 180 or 270. */
+  _rotation() {
+    const r = Number(this._status?.rotate) || 0;
+    return r === 90 || r === 180 || r === 270 ? r : 0;
+  }
+
+  /** The picture stands portrait once turned (a quarter turn of the NVR's landscape picture). */
+  _portraitContent() {
+    const r = this._rotation();
+    return r === 90 || r === 270;
   }
 
   /** Where along the seek bar a pointer is (0..1), along the bar's own axis: turned with the picture, the bar
@@ -999,7 +1061,7 @@ export class CgcNvrPlayer extends LitElement {
       return;
     }
     const at = clockAt(this._status, video.currentTime);
-    const blob = await frameJpeg(video).catch(() => null);
+    const blob = await frameJpeg(video, this._rotation()).catch(() => null);
     if (!blob) {
       this._showToast("This device didn't hand over the picture to save.", "err");
       return;
@@ -1169,7 +1231,7 @@ export class CgcNvrPlayer extends LitElement {
       await request.call(el, { navigationUI: "hide" });
       // Chrome turns the screen; a WebView (the Home Assistant app) can't, and the picture is turned instead.
       await screen.orientation
-        ?.lock?.("landscape")
+        ?.lock?.(this._portraitContent() ? "portrait" : "landscape")
         .then(() => {
           this._locked = true;
         })
@@ -1235,22 +1297,36 @@ export class CgcNvrPlayer extends LitElement {
     const shown = this._ui || this._phase !== "playing" || this._paused || !!this._drag;
     const z = this._zoom;
     const zoomed = z.s > 1;
+    const rot = this._rotation();
+    const quarter = rot === 90 || rot === 270;
+    // The video's transform: centred when a quarter turned (its box is the stage's, swapped), the zoom, the turn.
+    const moves = [
+      quarter ? "translate(-50%,-50%)" : "",
+      zoomed ? `translate(${z.x}px,${z.y}px) scale(${z.s})` : "",
+      rot ? `rotate(${rot}deg)` : "",
+    ].filter(Boolean);
     return html`
       <div
-        class="nvr ${this._fullscreen ? "fs" : ""} ${zoomed ? "zoomed" : ""}"
+        class="nvr ${this._fullscreen ? "fs" : ""} ${zoomed ? "zoomed" : ""} ${quarter
+          ? "portrait"
+          : ""}"
         @pointerdown=${stopEvent}
         @pointerup=${stopEvent}
         @pointercancel=${stopEvent}
         @click=${stopEvent}
         @dblclick=${stopEvent}
-        @touchstart=${{ handleEvent: stopEvent, passive: true }}
-        @touchend=${stopEvent}
+        @touchstart=${{ handleEvent: (e) => this._touchDown(e), passive: true }}
+        @touchend=${(e) => this._touchUp(e)}
+        @touchcancel=${(e) => {
+          e.stopPropagation();
+          this._tSwipe = null;
+        }}
         @wheel=${{ handleEvent: stopEvent, passive: true }}
       >
         <div class="nvr-stage" style="--nvr-rot:${this._rot}deg">
           <video
-            class="nvr-video"
-            style=${zoomed ? `transform:translate(${z.x}px,${z.y}px) scale(${z.s})` : ""}
+            class="nvr-video ${quarter ? "quarter" : ""}"
+            style=${moves.length ? `transform:${moves.join(" ")}` : ""}
             playsinline
             muted
             @timeupdate=${(e) => this._onTimeUpdate(e)}

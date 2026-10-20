@@ -43,7 +43,7 @@ import { pickCenterIndex, ScrubGesture } from "./data/scrub";
 import { sidecarFolder, sidecarUrl } from "./data/sidecar";
 import { planPreload, ThumbPreloader } from "./data/preload";
 import { monthOf } from "./data/calendar";
-import { renderCalendarPicker } from "./ui/calendar-picker";
+import { OutsidePress, renderCalendarPicker } from "./ui/calendar-picker";
 import { calendarPickerStyles } from "./ui/calendar-picker-styles";
 // BL-007: the multi-camera timeline card ships in the same bundle (<camera-timeline-card>).
 import "./timeline/timeline-card.js";
@@ -320,6 +320,8 @@ class CameraGalleryCard extends LitElement {
     // Swiped here streaming onto a camera without an NVR channel (the doorbell): its snapshot shows, and a swipe
     // on (while it stays selected) streams again.
     this._carry = null;
+    // Owner fork: a press anywhere outside the open calendar closes it.
+    this._calOutside = new OutsidePress(() => this.renderRoot, () => this._closeDatePicker());
     this._deleted = new Set();
     this._deletedFrigateEventIds = new Set();
     // Clean up legacy NEW-arrival localStorage from prior builds. The
@@ -911,6 +913,7 @@ class CameraGalleryCard extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this._calOutside?.stop();
 
     document.removeEventListener("fullscreenchange", this._onFullscreenChange);
     document.removeEventListener("webkitfullscreenchange", this._onFullscreenChange);
@@ -2001,7 +2004,7 @@ class CameraGalleryCard extends LitElement {
    * `aspect_ratio` is used.
    */
   _getPreviewAspectRatio(isLive) {
-    if (!isLive) return this._aspectRatio || "16/9";
+    if (!isLive) return this._galleryAspect() || this._aspectRatio || "16/9";
     const cams = Array.isArray(this.config?.live_cameras) ? this.config.live_cameras : [];
     const active = this._getEffectiveLiveCamera?.() || "";
     if (active && cams.length) {
@@ -2191,8 +2194,11 @@ class CameraGalleryCard extends LitElement {
     const host = this._getZoomHost();
     const preview = this.renderRoot?.querySelector('.preview');
     const fsOverlay = this.renderRoot?.querySelector('.img-fs-overlay');
+    // Owner fork: unzoomed, the preview keeps the touch-action its template gives it (pan-y in the gallery, so a
+    // horizontal swipe stays the page's). Blanking it here left 'auto': the browser then took every swipe.
+    const restTouch = this._isLiveActive() ? 'auto' : 'pan-y';
     if (!host) {
-      if (preview) { preview.style.touchAction = ''; preview.style.cursor = ''; }
+      if (preview) { preview.style.touchAction = restTouch; preview.style.cursor = ''; }
       if (fsOverlay) { fsOverlay.style.cursor = ''; }
       return;
     }
@@ -2200,7 +2206,7 @@ class CameraGalleryCard extends LitElement {
       host.style.transform = '';
       host.style.transformOrigin = '';
       if (this._isLiveActive()) host.style.cursor = '';
-      if (preview) { preview.style.touchAction = ''; preview.style.cursor = ''; }
+      if (preview) { preview.style.touchAction = restTouch; preview.style.cursor = ''; }
       if (fsOverlay) { fsOverlay.style.cursor = ''; }
     } else {
       host.style.transformOrigin = 'center center';
@@ -5417,13 +5423,27 @@ class CameraGalleryCard extends LitElement {
   /** Paint the cached GIF still under the full GIF in the main viewer, so a
    * newly selected clip shows its first frame at once instead of an empty
    * frame while the whole file downloads. */
+  /** Owner fork: `gallery_aspect_ratio` ("3:4" and the like) as a CSS ratio for the gallery's picture (not live);
+   * "" when unset or not a ratio. A camera mounted on its side gives portrait pictures. */
+  _galleryAspect() {
+    const m = /^\s*(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)\s*$/.exec(String(this.config?.gallery_aspect_ratio ?? ""));
+    return m && Number(m[1]) > 0 && Number(m[2]) > 0 ? `${m[1]}/${m[2]}` : "";
+  }
+
+  /** How the gallery's picture fits its box: `gallery_fit`, else `object_fit` (thumbnails and live keep that). */
+  _galleryFit() {
+    const f = this.config?.gallery_fit;
+    if (f === "contain" || f === "cover") return f;
+    return this.config?.object_fit === "contain" ? "contain" : "cover";
+  }
+
   _previewStillStyle(src) {
     const preview = this._sidecarFor(src);
     if (preview) return this._underlayStyle(preview);
     if (this.config?.gif_thumbnails === "animated" || !isGifPath(src)) return "";
     const still = this._posterClient.getPosterUrl(src);
     if (!still) return "";
-    const fit = this.config?.object_fit === "contain" ? "contain" : "cover";
+    const fit = this._galleryFit();
     return `background-image:url("${still}");background-size:${fit};background-position:center;background-repeat:no-repeat;`;
   }
 
@@ -5444,7 +5464,7 @@ class CameraGalleryCard extends LitElement {
   /** An image painted under the viewer's image, sized like it, until the image itself has loaded. */
   _underlayStyle(url) {
     if (!url) return "";
-    const fit = this.config?.object_fit === "contain" ? "contain" : "cover";
+    const fit = this._galleryFit();
     return `background-image:url("${url}");background-size:${fit};background-position:center;background-repeat:no-repeat;`;
   }
 
@@ -5576,6 +5596,9 @@ class CameraGalleryCard extends LitElement {
     this._swiping = false;
 
     if (this.config?.clean_mode && !this._previewOpen) return;
+    // Owner fork: a cancelled pointer is the browser taking the touch (a scroll, a swipe it started to pan): no tap.
+    // Touch swipes are decided from the touch events (_onPreviewTouchEnd).
+    if (e.type === "pointercancel" && e.pointerType === "touch") return;
 
     const endX = (e.clientX !== 0 || e.clientY !== 0) ? e.clientX : this._swipeCurX;
     const endY = (e.clientX !== 0 || e.clientY !== 0) ? e.clientY : this._swipeCurY;
@@ -5602,14 +5625,52 @@ class CameraGalleryCard extends LitElement {
       return;
     }
 
+    if (e.pointerType === "touch") return;
     if (Math.abs(dy) > Math.abs(dx)) return;
     if (Math.abs(dx) < 45) return;
+    this._previewSwipe(dx < 0 ? 1 : -1, listLen);
+  }
+
+  /** Owner fork: a touch swipe is read from the touch itself, start to end. The browser cancels the pointer of a
+   * swipe it began to pan (one that starts a little vertically), and the pills stop pointerdown, but the touch
+   * events go on. Pointer events keep taps and the mouse. */
+  _onPreviewTouchStart(e) {
+    this._tSwipe = null;
+    if (e.touches?.length !== 1 || this._isLiveActive() || this._selectMode || this._zoomScale > 1) return;
+    const path = e.composedPath?.() || [];
+    if (
+      this._pathHasClass(path, "vid-progress") ||
+      this._pathHasClass(path, "live-picker") ||
+      this._pathHasClass(path, "live-quick-switch")
+    ) {
+      return;
+    }
+    const t = e.touches[0];
+    this._tSwipe = { x: t.clientX, y: t.clientY, t: Date.now() };
+  }
+
+  _onPreviewTouchEnd(e, listLen) {
+    const g = this._tSwipe;
+    this._tSwipe = null;
+    if (!g || e.touches?.length) return;
+    const t = e.changedTouches?.[0];
+    if (!t || this._zoomScale > 1 || this._zoomIsPinching) return;
+    const dx = t.clientX - g.x;
+    const dy = t.clientY - g.y;
+    // Up to 45 degrees off the horizontal, however slow (a drag across the picture means the same; 5 s bounds a
+    // finger left resting).
+    if (Math.abs(dx) < 45 || Math.abs(dx) <= Math.abs(dy) || Date.now() - g.t > 5000) return;
+    this._previewSwipe(dx < 0 ? 1 : -1, listLen);
+  }
+
+  /** A swipe on the picture: the next (1) / previous (-1) camera with `swipe_cameras`, else the next / previous
+   * item, as upstream. */
+  _previewSwipe(dir, listLen) {
     if (this._selectMode) return;
+    if (this.config?.clean_mode && !this._previewOpen) return;
+    if (this._goToCamera(dir, this._swipeContext())) return;
 
-    // Owner fork: with `swipe_cameras`, a swipe goes to the next / previous camera at the same moment.
-    if (this._goToCamera(dx < 0 ? 1 : -1, this._swipeContext())) return;
-
-    if (dx < 0) {
+    if (dir > 0) {
       if ((this._selectedIndex ?? 0) < listLen - 1) {
         this._selectedIndex = (this._selectedIndex ?? 0) + 1;
       }
@@ -5879,6 +5940,7 @@ class CameraGalleryCard extends LitElement {
   }
 
   updated(changedProps) {
+    this._calOutside?.sync(!!this._showDatePicker);
     const dayChanged = changedProps.has("_selectedDay");
     const filterChanged = changedProps.has("_objectFilters");
     if (!this._nvrWarmed && this._hass) {
@@ -6418,7 +6480,7 @@ class CameraGalleryCard extends LitElement {
       ? html`
           <div
             class="preview"
-            style="aspect-ratio:${this._getPreviewAspectRatio(isLive)}; touch-action:${isLive ? "auto" : "pan-y"};"
+            style="aspect-ratio:${this._getPreviewAspectRatio(isLive)}; touch-action:${isLive ? "auto" : "pan-y"};${!isLive && this.config?.gallery_fit ? ` --cgc-object-fit:${this._galleryFit()};` : ""}"
             @pointerdown=${(e) => {
               if (e?.isPrimary === false) return;
               const path = e.composedPath?.() || [];
@@ -6444,6 +6506,9 @@ class CameraGalleryCard extends LitElement {
             @pointermove=${(e) => { if (this._swiping && e.isPrimary !== false) { this._swipeCurX = e.clientX; this._swipeCurY = e.clientY; } }}
             @pointerup=${(e) => this._onPreviewPointerUp(e, filtered.length)}
             @pointercancel=${(e) => this._onPreviewPointerUp(e, filtered.length)}
+            @touchstart=${{ handleEvent: (e) => this._onPreviewTouchStart(e), passive: true }}
+            @touchend=${{ handleEvent: (e) => this._onPreviewTouchEnd(e, filtered.length), passive: true }}
+            @touchcancel=${{ handleEvent: () => { this._tSwipe = null; }, passive: true }}
             @pointerenter=${(e) => { if (e.pointerType === "mouse") this._showPillsHover(); }}
             @pointerleave=${(e) => { if (e.pointerType === "mouse") this._hidePillsHover(); }}
             @click=${(e) => this._onPreviewClick(e)}
@@ -7115,7 +7180,7 @@ class CameraGalleryCard extends LitElement {
                     }
                   }}
                 />`}
-            ${filtered.length > 1 ? html`
+            ${filtered.length > 1 && this.config?.gallery_chevrons_enabled !== false ? html`
               <div class="pnav img-fs-nav">
                 <button class="pnavbtn left" ?disabled=${idx <= 0} @pointerdown=${(e) => e.stopPropagation()} @click=${(e) => { e.stopPropagation(); this._navImgFs(-1, filtered.length); }}>
                   <ha-icon icon="mdi:chevron-left"></ha-icon>
