@@ -179,14 +179,20 @@ With `nvr_channel` set, the gallery pills get **Low** and **High**. They play th
 the selected item's moment:
 - playback starts in a second or two, anywhere in a recording (add-on 0.2+), and its seek bar seeks anywhere in
   that half hour;
-- the player's clock shows the moment being watched;
 - Low and High switch in place, and playback continues into the next recording;
 - the player has its own controls over the picture (play / pause, a seek bar with the clock time under the
-  finger, mute, full screen; the clock, Low / High and close at the top). They hide while it plays, and a tap
-  brings them back;
+  finger, mute, full screen; Low / High and close at the top). They hide while it plays, and a tap brings them
+  back. Nothing else covers the picture: the time of day is the one the camera prints on it;
+- on the picture, a double tap on its left or right side goes back or forward 10 s, and each further tap there
+  adds 10 s. Pinch zooms on the point between the fingers (up to 8×), one finger then moves the zoomed picture,
+  and the magnifier chip at the top (shown with the controls) returns to the whole picture. A trackpad pinch or
+  Ctrl + wheel zooms too;
 - full screen is landscape: Chrome turns the screen. In an app's WebView (the Home Assistant app), where a page
   can't turn the screen, the picture is turned while the screen is portrait; hold the phone sideways. The seek
-  bar follows the finger along the turned picture. iPhones use their own player.
+  bar, the double taps and the zoom follow the turned picture. iPhones use their own player.
+
+The Vehicle Intelligence card's **Recording** button opens this same player (`<cgc-nvr-player>`, defined by this
+bundle), so it has the same controls and gestures, with that card's own Low / High and back button above it.
 
 The gallery's own full screen (the image button) does the same for a landscape snapshot or GIF: turned on a
 portrait screen, with pinch zoom and panning following the finger.

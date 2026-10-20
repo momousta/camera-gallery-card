@@ -25,6 +25,9 @@ export const nvrPlayerStyles = css`
     position: absolute;
     inset: 0;
   }
+  .nvr-stage {
+    overflow: hidden; /* a zoomed picture stays in its frame */
+  }
   .nvr.fs {
     background: #000;
   }
@@ -49,11 +52,71 @@ export const nvrPlayerStyles = css`
     height: 100%;
     object-fit: contain;
     background: #000;
+    transform-origin: center center;
   }
+  /* Taps, double taps (skip), pinch zoom and, zoomed, panning: the page may still scroll vertically over the
+     picture, except full screen or zoomed. */
   .nvr-tap {
     position: absolute;
     inset: 0;
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
+  }
+  .nvr.fs .nvr-tap,
+  .nvr.zoomed .nvr-tap {
+    touch-action: none;
+  }
+  .nvr-skip {
+    position: absolute;
+    top: 50%;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    font-size: 14px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    transform: translateY(-50%);
+    pointer-events: none;
+    animation: nvr-skip 0.2s ease-out;
+  }
+  .nvr-skip.back {
+    left: 10%;
+  }
+  .nvr-skip.fwd {
+    right: 10%;
+  }
+  .nvr-skip ha-icon {
+    --mdc-icon-size: 20px;
+  }
+  @keyframes nvr-skip {
+    from {
+      opacity: 0;
+      transform: translateY(-50%) scale(0.8);
+    }
+  }
+  .nvr-zoom {
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+  }
+  .nvr-zoom ha-icon {
+    --mdc-icon-size: 16px;
   }
   .nvr-wait {
     position: absolute;
@@ -142,9 +205,11 @@ export const nvrPlayerStyles = css`
   .nvr-ui.shown {
     opacity: 1;
   }
-  /* Hidden controls can't be pressed: the tap goes to the picture and shows them. */
-  .nvr-ui.shown .nvr-bar,
-  .nvr-ui.shown .nvr-ctl,
+  /* Hidden controls can't be pressed: the tap goes to the picture and shows them. Shown, only the controls
+     themselves take taps; the bars' empty parts leave them (and double taps) to the picture. */
+  .nvr-ui.shown .nvr-bar > :not(.nvr-gap),
+  .nvr-ui.shown .nvr-ctl:not(.nvr-ctl-min),
+  .nvr-ui.shown .nvr-ctl-min > *,
   .nvr-ui.shown .nvr-big {
     pointer-events: auto;
   }
@@ -170,6 +235,9 @@ export const nvrPlayerStyles = css`
   }
   .nvr-ctl-min {
     justify-content: flex-end;
+    background: none;
+  }
+  .nvr-bar-min {
     background: none;
   }
   .nvr-big {
@@ -260,26 +328,6 @@ export const nvrPlayerStyles = css`
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     pointer-events: none;
-  }
-  .nvr-tag,
-  .nvr-clock {
-    height: 28px;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 0 10px;
-    border-radius: 999px;
-    background: rgba(0, 0, 0, 0.55);
-    font-size: 12px;
-    font-weight: 800;
-    white-space: nowrap;
-  }
-  .nvr-tag ha-icon {
-    --mdc-icon-size: 16px;
-    color: #ef5350;
-  }
-  .nvr-clock {
-    font-variant-numeric: tabular-nums;
   }
   .nvr-res {
     margin-left: auto;

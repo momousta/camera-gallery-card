@@ -1,8 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { formatClockFromMs } from "../util/locale";
-
 // BL-008: <cgc-nvr-player> against a fake NVR Playback add-on and a fake hls.js.
 
 const BASE = "/api/hassio_ingress/tok/";
@@ -215,9 +213,9 @@ describe("<cgc-nvr-player>", () => {
     Object.defineProperty(video(el), "currentTime", { value: 754.5, configurable: true });
     video(el).dispatchEvent(new Event("timeupdate"));
     await el.updateComplete;
-    expect(el.shadowRoot.querySelector(".nvr-clock").textContent).toBe(
-      formatClockFromMs(FILE_START + 754_500, el.hass.locale)
-    );
+    expect(el._clock).toBe(FILE_START + 754_500); // kept for Low / High; not shown (the camera shows the time)
+    expect(el.shadowRoot.querySelector(".nvr-clock")).toBeNull();
+    expect(el.shadowRoot.textContent).not.toContain("NVR");
 
     el.remove();
     expect(hls.destroyed).toBe(true);
@@ -326,10 +324,10 @@ describe("<cgc-nvr-player>", () => {
     expect(plays(calls)[2]).toMatchObject({ stream: "main", time: FILE_START + 1_800_000 + 1000 });
   });
 
-  it("bare: the clock and full screen, the host has its own Low / High and close", async () => {
+  it("bare: no top bar (the host has its own Low / High and close), full screen in the controls", async () => {
     installFetch(happyRoute());
     const el = await mount({ bare: true });
-    expect(el.shadowRoot.querySelector(".nvr-clock")).not.toBeNull();
+    expect(el.shadowRoot.querySelector(".nvr-bar")).toBeNull();
     expect(el.shadowRoot.querySelector(".nvr-fs")).not.toBeNull();
     expect(el.shadowRoot.querySelector(".nvr-res")).toBeNull();
     expect(el.shadowRoot.querySelector(".nvr-close")).toBeNull();
@@ -568,6 +566,33 @@ describe("<cgc-nvr-player>", () => {
       });
     const ui = (el: any) => el.shadowRoot.querySelector(".nvr-ui");
     const q = (el: any, sel: string) => el.shadowRoot.querySelector(sel);
+    /** A pointer event with its own id (jsdom has no PointerEvent). */
+    const ptr = (type: string, id: number, x: number, y: number): any => {
+      const e: any = new MouseEvent(type, {
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+      });
+      Object.defineProperty(e, "pointerId", { value: id });
+      Object.defineProperty(e, "pointerType", { value: "touch" });
+      return e;
+    };
+    /** The picture laid out at 400 × 225 px from the top-left corner (jsdom has no layout). */
+    const layout = (el: any) => {
+      q(el, ".nvr-stage").getBoundingClientRect = () =>
+        ({ left: 0, top: 0, width: 400, height: 225, right: 400, bottom: 225 }) as DOMRect;
+    };
+    let nextId = 1;
+    async function tapAt(el: any, x: number, y: number, wait = 350) {
+      const id = nextId++;
+      q(el, ".nvr-tap").dispatchEvent(ptr("pointerdown", id, x, y));
+      q(el, ".nvr-tap").dispatchEvent(ptr("pointerup", id, x, y));
+      if (wait) await vi.advanceTimersByTimeAsync(wait);
+      await el.updateComplete;
+    }
 
     /** A player that plays: 30 minutes long, at 753 s; `paused` is the test's to set. */
     async function playing(props: Record<string, unknown> = {}) {
@@ -603,11 +628,9 @@ describe("<cgc-nvr-player>", () => {
       await vi.advanceTimersByTimeAsync(1900);
       await el.updateComplete;
       expect(ui(el).classList.contains("shown")).toBe(false);
-      q(el, ".nvr-tap").click(); // a tap on the picture
-      await el.updateComplete;
+      await tapAt(el, 200, 110); // a tap on the picture
       expect(ui(el).classList.contains("shown")).toBe(true);
-      q(el, ".nvr-tap").click(); // and again: away
-      await el.updateComplete;
+      await tapAt(el, 200, 110); // and again: away
       expect(ui(el).classList.contains("shown")).toBe(false);
 
       // Paused: they stay.
@@ -674,6 +697,79 @@ describe("<cgc-nvr-player>", () => {
       await vi.advanceTimersByTimeAsync(1900);
       await el.updateComplete;
       expect(ui(el).classList.contains("shown")).toBe(false);
+    });
+
+    it("a double tap on a side skips 10 s back or forward; tapping on keeps skipping", async () => {
+      const { el, state } = await playing();
+      layout(el);
+      await tapAt(el, 350, 110, 100);
+      await tapAt(el, 350, 110, 0); // the second tap within 300 ms
+      expect(state.t).toBe(763);
+      expect(q(el, ".nvr-skip").textContent.replace(/\s+/g, " ").trim()).toBe("+10 s");
+      await tapAt(el, 350, 110, 0); // a third tap right after: on
+      expect(state.t).toBe(773);
+      expect(q(el, ".nvr-skip").textContent).toContain("+20 s");
+      expect(ui(el).classList.contains("shown")).toBe(true); // a skip doesn't toggle the controls
+      await vi.advanceTimersByTimeAsync(900);
+      await el.updateComplete;
+      expect(q(el, ".nvr-skip")).toBeNull();
+      await tapAt(el, 40, 110, 100);
+      await tapAt(el, 40, 110, 0);
+      expect(state.t).toBe(763); // the left side: back
+      await vi.advanceTimersByTimeAsync(900);
+      await tapAt(el, 200, 110, 100); // the middle: no skip
+      await tapAt(el, 200, 110, 0);
+      expect(state.t).toBe(763);
+    });
+
+    it("a single tap waits for a possible second one before it shows or hides the controls", async () => {
+      const { el } = await playing();
+      layout(el);
+      await vi.advanceTimersByTimeAsync(1900);
+      await el.updateComplete;
+      await tapAt(el, 200, 110, 100);
+      expect(ui(el).classList.contains("shown")).toBe(false);
+      await vi.advanceTimersByTimeAsync(250);
+      await el.updateComplete;
+      expect(ui(el).classList.contains("shown")).toBe(true);
+    });
+
+    it("pinch zooms on the point between the fingers; one finger pans; the chip and full screen reset it", async () => {
+      const { el } = await playing();
+      layout(el);
+      const tap = q(el, ".nvr-tap");
+      tap.dispatchEvent(ptr("pointerdown", 21, 150, 112));
+      tap.dispatchEvent(ptr("pointerdown", 22, 250, 112));
+      tap.dispatchEvent(ptr("pointermove", 21, 100, 112));
+      tap.dispatchEvent(ptr("pointermove", 22, 300, 112)); // twice as far apart
+      await el.updateComplete;
+      expect(el._zoom.s).toBeCloseTo(2);
+      expect(q(el, ".nvr-video").getAttribute("style")).toContain("scale(2)");
+      expect(el.shadowRoot.querySelector(".nvr").classList.contains("zoomed")).toBe(true);
+      tap.dispatchEvent(ptr("pointerup", 22, 300, 112));
+      // The finger left on the picture pans it.
+      const x0 = el._zoom.x;
+      tap.dispatchEvent(ptr("pointermove", 21, 70, 112));
+      expect(el._zoom.x).toBeCloseTo(x0 - 30);
+      tap.dispatchEvent(ptr("pointerup", 21, 70, 112));
+      await el.updateComplete;
+      expect(q(el, ".nvr-zoom").textContent).toContain("2.0×");
+      q(el, ".nvr-zoom").click();
+      await el.updateComplete;
+      expect(el._zoom).toEqual({ s: 1, x: 0, y: 0 });
+      expect(q(el, ".nvr-video").getAttribute("style")).toBe("");
+
+      // Turned full screen: a finger moving down the screen pans the picture to its right.
+      el._setZoom(2, 0, 0);
+      vi.stubGlobal("matchMedia", (m: string) => ({ matches: m.includes("portrait") }));
+      el._fullscreen = true;
+      el._rot = 90;
+      tap.dispatchEvent(ptr("pointerdown", 31, 200, 100));
+      tap.dispatchEvent(ptr("pointermove", 31, 200, 140));
+      expect([el._zoom.x, el._zoom.y + 0]).toEqual([40, 0]);
+      tap.dispatchEvent(ptr("pointerup", 31, 200, 140));
+      el._fsChanged(); // leaving full screen (nothing is full screen in jsdom)
+      expect(el._zoom.s).toBe(1);
     });
 
     it("times read m:ss, or h:mm:ss from an hour", () => {

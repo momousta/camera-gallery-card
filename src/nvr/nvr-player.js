@@ -21,7 +21,7 @@
 
 import { LitElement, html } from "lit";
 
-import { portraitScreen, turnFromMotion } from "../util/landscape";
+import { portraitScreen, turnFromMotion, unturn } from "../util/landscape";
 import { formatClockFromMs } from "../util/locale";
 import {
   AddonLocator,
@@ -50,6 +50,10 @@ const LIVE_EDGE_MS = 20_000;
 const WARM_EVERY_MS = 10 * 60_000; // the add-on keeps a listed day for hours
 const UI_HIDE_MS = 1800; // while playing, the controls hide this long after the last touch
 const SEEK_STEP_S = 10;
+const TAP_MS = 300; // a second tap within this is a double tap (so a single tap acts this much later)
+const SKIP_S = 10; // a double tap on a side: back or forward this much
+const STREAK_MS = 800; // after a double tap, each tap on the same side within this skips again
+const MAX_ZOOM = 8;
 
 let session = new IngressSession();
 let locator = new AddonLocator();
@@ -137,6 +141,9 @@ export function fmtTime(s) {
   return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
 }
 
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
 /** The end of the buffered stretch the playhead is in (seconds), or 0. */
 function bufferedEnd(video) {
   const b = video?.buffered;
@@ -173,6 +180,8 @@ export class CgcNvrPlayer extends LitElement {
       _dur: { state: true },
       _buf: { state: true },
       _drag: { state: true },
+      _zoom: { state: true },
+      _skip: { state: true },
     };
   }
 
@@ -204,6 +213,15 @@ export class CgcNvrPlayer extends LitElement {
     this._buf = 0;
     this._drag = null; // { id, ratio } while a finger drags the seek bar
     this._hideTimer = 0;
+    // Gestures on the picture: taps, double taps (skip), pinch zoom and panning while zoomed.
+    this._zoom = { s: 1, x: 0, y: 0 }; // scale, then the picture's pan in its own frame (px)
+    this._skip = null; // { side, secs } shown a moment after a double-tap skip
+    this._ptrs = new Map();
+    this._gest = null;
+    this._lastTap = null;
+    this._tapTimer = 0;
+    this._streak = null;
+    this._skipTimer = 0;
     this._onFsChange = () => this._fsChanged();
     this._onMotion = (e) => this._motion(e);
     this._phase = "idle"; // idle | starting | fetching | buffering | playing | error
@@ -233,6 +251,8 @@ export class CgcNvrPlayer extends LitElement {
     document.removeEventListener("webkitfullscreenchange", this._onFsChange);
     this._run++;
     clearTimeout(this._hideTimer);
+    clearTimeout(this._tapTimer);
+    clearTimeout(this._skipTimer);
     this._teardown();
     this._leftFullscreen();
   }
@@ -262,6 +282,7 @@ export class CgcNvrPlayer extends LitElement {
     atMs = Math.min(atMs, Date.now() - LIVE_EDGE_MS);
     const run = ++this._run;
     this._teardown();
+    this._resetZoom();
     this._phase = "starting";
     this._status = null;
     this._error = "";
@@ -589,6 +610,172 @@ export class CgcNvrPlayer extends LitElement {
     }, UI_HIDE_MS);
   }
 
+  // ── gestures on the picture ─────────────────────────────────────────
+
+  /** The picture's centre on screen and its own width (the frame it is drawn in, turned or not). */
+  _frame() {
+    const stage = this.renderRoot?.querySelector(".nvr-stage");
+    const r = stage?.getBoundingClientRect();
+    if (!r) return null;
+    return {
+      cx: r.left + r.width / 2,
+      cy: r.top + r.height / 2,
+      w: stage.offsetWidth || r.width,
+      h: stage.offsetHeight || r.height,
+    };
+  }
+
+  _tapDown(e) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* not capturable (tests) */
+    }
+    this._ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this._ptrs.size === 1) {
+      this._gest = {
+        kind: "tap",
+        x0: e.clientX,
+        y0: e.clientY,
+        t0: performance.now(),
+        moved: false,
+        pan: { ...this._zoom },
+      };
+    } else if (this._ptrs.size === 2) {
+      const [a, b] = [...this._ptrs.values()];
+      this._gest = { kind: "pinch", d0: dist(a, b) || 1, z0: { ...this._zoom }, m0: mid(a, b) };
+      clearTimeout(this._tapTimer);
+      this._lastTap = null;
+    }
+  }
+
+  _tapMove(e) {
+    const p = this._ptrs.get(e.pointerId);
+    const g = this._gest;
+    if (!p || !g) return;
+    p.x = e.clientX;
+    p.y = e.clientY;
+    if (g.kind === "pinch" && this._ptrs.size >= 2) {
+      const [a, b] = [...this._ptrs.values()];
+      const f = this._frame();
+      if (!f) return;
+      const turn = this._turn();
+      const s = Math.min(MAX_ZOOM, Math.max(1, g.z0.s * (dist(a, b) / g.d0)));
+      // The point of the picture under the fingers when they landed stays under them.
+      const [ux, uy] = unturn(g.m0.x - f.cx, g.m0.y - f.cy, turn);
+      const lx = (ux - g.z0.x) / g.z0.s;
+      const ly = (uy - g.z0.y) / g.z0.s;
+      const m = mid(a, b);
+      const [vx, vy] = unturn(m.x - f.cx, m.y - f.cy, turn);
+      this._setZoom(s, vx - s * lx, vy - s * ly);
+    } else if (g.kind === "tap") {
+      const dx = e.clientX - g.x0;
+      const dy = e.clientY - g.y0;
+      if (!g.moved && Math.hypot(dx, dy) > 10) g.moved = true;
+      if (g.moved && this._zoom.s > 1) {
+        const [lx, ly] = unturn(dx, dy, this._turn());
+        this._setZoom(this._zoom.s, g.pan.x + lx, g.pan.y + ly);
+      }
+    }
+  }
+
+  _tapUp(e) {
+    const g = this._gest;
+    if (!this._ptrs.delete(e.pointerId) || !g) return;
+    if (g.kind === "pinch") {
+      if (this._ptrs.size === 1) {
+        // One finger stays: it pans from here.
+        const [p] = [...this._ptrs.values()];
+        this._gest = {
+          kind: "tap",
+          x0: p.x,
+          y0: p.y,
+          t0: performance.now(),
+          moved: true,
+          pan: { ...this._zoom },
+        };
+      } else if (!this._ptrs.size) {
+        this._gest = null;
+      }
+      return;
+    }
+    if (!this._ptrs.size) this._gest = null;
+    if (e.type === "pointercancel" || g.moved || performance.now() - g.t0 > 500) return;
+    this._tapAt(e.clientX, e.clientY);
+  }
+
+  /** -1 / 1: the left / right side of the picture (in its own frame); 0: the middle fifth. */
+  _sideAt(x, y) {
+    const f = this._frame();
+    if (!f) return 0;
+    const [lx] = unturn(x - f.cx, y - f.cy, this._turn());
+    return lx < -f.w * 0.1 ? -1 : lx > f.w * 0.1 ? 1 : 0;
+  }
+
+  _tapAt(x, y) {
+    const now = performance.now();
+    const side = this._sideAt(x, y);
+    if (this._streak && now < this._streak.until && side && side === this._streak.side) {
+      this._skipBy(side); // tapping on after a double tap keeps skipping
+      return;
+    }
+    const last = this._lastTap;
+    if (last && now - last.t < TAP_MS && Math.hypot(x - last.x, y - last.y) < 80) {
+      clearTimeout(this._tapTimer);
+      this._lastTap = null;
+      if (side) this._skipBy(side);
+      return;
+    }
+    this._lastTap = { t: now, x, y };
+    clearTimeout(this._tapTimer);
+    this._tapTimer = setTimeout(() => {
+      this._lastTap = null;
+      this._onTap();
+    }, TAP_MS);
+  }
+
+  _skipBy(side) {
+    if (this._phase !== "playing") return;
+    const now = performance.now();
+    const going = this._streak && now < this._streak.until && this._streak.side === side;
+    this._streak = { side, until: now + STREAK_MS, secs: (going ? this._streak.secs : 0) + SKIP_S };
+    this._seekTo((this._video()?.currentTime ?? 0) + side * SKIP_S);
+    this._skip = { side, secs: this._streak.secs };
+    clearTimeout(this._skipTimer);
+    this._skipTimer = setTimeout(() => {
+      this._skip = null;
+    }, STREAK_MS);
+  }
+
+  _onWheel(e) {
+    if (!e.ctrlKey) return; // a trackpad pinch (or Ctrl + wheel) zooms; a plain wheel scrolls the page
+    e.preventDefault();
+    const f = this._frame();
+    if (!f) return;
+    const z = this._zoom;
+    const s = Math.min(MAX_ZOOM, Math.max(1, z.s * (e.deltaY > 0 ? 0.9 : 1.1)));
+    const [ux, uy] = unturn(e.clientX - f.cx, e.clientY - f.cy, this._turn());
+    const lx = (ux - z.x) / z.s;
+    const ly = (uy - z.y) / z.s;
+    this._setZoom(s, ux - s * lx, uy - s * ly);
+  }
+
+  _setZoom(s, x, y) {
+    if (s <= 1.01) {
+      this._resetZoom();
+      return;
+    }
+    const f = this._frame();
+    const mx = f ? (f.w * (s - 1)) / 2 : 0;
+    const my = f ? (f.h * (s - 1)) / 2 : 0;
+    this._zoom = { s, x: Math.min(mx, Math.max(-mx, x)), y: Math.min(my, Math.max(-my, y)) };
+  }
+
+  _resetZoom() {
+    if (this._zoom.s !== 1 || this._zoom.x || this._zoom.y) this._zoom = { s: 1, x: 0, y: 0 };
+  }
+
   /** A tap on the picture: hide the controls while playing, else show them. */
   _onTap() {
     const video = this._video();
@@ -766,6 +953,7 @@ export class CgcNvrPlayer extends LitElement {
     if (!any) this._fsAsked = false;
     if (now === this._fullscreen) return;
     this._fullscreen = now;
+    this._resetZoom(); // the frame changed size (and maybe turned)
     if (now) this._startMotion();
     else this._leftFullscreen();
   }
@@ -804,9 +992,11 @@ export class CgcNvrPlayer extends LitElement {
     const locale = this.hass?.locale;
     const waiting = this._phase !== "playing" && (!this.quiet || this._revealed);
     const shown = this._ui || this._phase !== "playing" || this._paused || !!this._drag;
+    const z = this._zoom;
+    const zoomed = z.s > 1;
     return html`
       <div
-        class="nvr ${this._fullscreen ? "fs" : ""}"
+        class="nvr ${this._fullscreen ? "fs" : ""} ${zoomed ? "zoomed" : ""}"
         @pointerdown=${stopEvent}
         @pointerup=${stopEvent}
         @pointercancel=${stopEvent}
@@ -819,6 +1009,7 @@ export class CgcNvrPlayer extends LitElement {
         <div class="nvr-stage" style="--nvr-rot:${this._rot}deg">
           <video
             class="nvr-video"
+            style=${zoomed ? `transform:translate(${z.x}px,${z.y}px) scale(${z.s})` : ""}
             playsinline
             muted
             @timeupdate=${(e) => this._onTimeUpdate(e)}
@@ -833,15 +1024,32 @@ export class CgcNvrPlayer extends LitElement {
             @ended=${() => this._onEnded()}
             @error=${() => this._onVideoError()}
           ></video>
-          <div class="nvr-tap" @click=${() => this._onTap()}></div>
+          <div
+            class="nvr-tap"
+            @pointerdown=${(e) => this._tapDown(e)}
+            @pointermove=${(e) => this._tapMove(e)}
+            @pointerup=${(e) => this._tapUp(e)}
+            @pointercancel=${(e) => this._tapUp(e)}
+            @wheel=${(e) => this._onWheel(e)}
+          ></div>
+          ${this._skip
+            ? html`<div class="nvr-skip ${this._skip.side < 0 ? "back" : "fwd"}" aria-live="polite">
+                <ha-icon icon=${this._skip.side < 0 ? "mdi:rewind" : "mdi:fast-forward"}></ha-icon>
+                ${this._skip.side < 0 ? "−" : "+"}${this._skip.secs} s
+              </div>`
+            : ""}
           ${waiting ? this._renderWait() : ""}
           <div class="nvr-ui ${shown ? "shown" : ""}">
-            <div class="nvr-bar">
-              <span class="nvr-tag"><ha-icon icon="mdi:filmstrip-box"></ha-icon>NVR</span>
-              <span class="nvr-clock">${formatClockFromMs(this._clock ?? NaN, locale)}</span>
-              <span class="nvr-gap"></span>
-              ${this.bare ? "" : this._renderControls()}
-            </div>
+            ${this.bare
+              ? "" /* the host has its own Low / High and close; the camera shows the time itself */
+              : html`<div class="nvr-bar">
+                  ${zoomed ? this._renderZoomChip() : ""}
+                  <span class="nvr-gap"></span>
+                  ${this._renderControls()}
+                </div>`}
+            ${this.bare && zoomed
+              ? html`<div class="nvr-bar nvr-bar-min">${this._renderZoomChip()}</div>`
+              : ""}
             ${this._phase === "playing"
               ? this._renderTransport(locale)
               : html`<div class="nvr-ctl nvr-ctl-min">${this._renderFullscreen()}</div>`}
@@ -899,6 +1107,17 @@ export class CgcNvrPlayer extends LitElement {
         ${this._renderFullscreen()}
       </div>
     `;
+  }
+
+  _renderZoomChip() {
+    return html`<button
+      class="nvr-zoom"
+      title="Back to the whole picture"
+      aria-label="Zoom ${this._zoom.s.toFixed(1)}×, reset"
+      @click=${() => this._resetZoom()}
+    >
+      <ha-icon icon="mdi:magnify-minus-outline"></ha-icon>${this._zoom.s.toFixed(1)}×
+    </button>`;
   }
 
   _renderFullscreen() {
