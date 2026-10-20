@@ -100,6 +100,77 @@ export const nvrPlayerStyles = css`
       transform: translateY(-50%) scale(0.8);
     }
   }
+  /* Recording: always on screen (top centre, clear of the zoom chip and Low / High), with the clip's length. */
+  .nvr-recchip {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.6);
+    font-size: 12px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  .nvr-recdot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #ef5350;
+    animation: nvr-rec 1s ease-in-out infinite alternate;
+  }
+  @keyframes nvr-rec {
+    to {
+      opacity: 0.3;
+    }
+  }
+  .nvr-rec.on ha-icon {
+    color: #ef5350;
+  }
+  /* Centred across the whole width (left: 50% would leave it half the width to wrap in). */
+  .nvr-toast {
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    bottom: calc(var(--nvr-bar-h) + 4px); /* just above the seek bar, clear of the play button */
+    z-index: 3;
+    width: fit-content;
+    margin: 0 auto;
+    padding: 7px 12px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.72);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+    text-align: center;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+  }
+  .nvr-toast.err {
+    background: rgba(183, 28, 28, 0.88);
+  }
+  .nvr-flash {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: #fff;
+    opacity: 0;
+    pointer-events: none;
+    animation: nvr-flash 0.35s ease-out;
+  }
+  @keyframes nvr-flash {
+    from {
+      opacity: 0.7;
+    }
+  }
   .nvr-zoom {
     height: 28px;
     display: inline-flex;

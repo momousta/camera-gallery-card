@@ -5,6 +5,10 @@
  * (its small preview, BL-006), with how old it is. Drag or flick the time track under the centre playhead, or
  * play it forward; pausing holds every camera on that moment. Tap a camera for its full clip.
  *
+ * In a camera's full view, a swipe goes to the next / previous camera at the same moment: its closest frame, or,
+ * while the NVR recording plays, that camera's recording from the moment on screen in the same quality (a camera
+ * without `nvr_channel` shows its frame and passes the stream on to the next swipe).
+ *
  * Config:
  *   type: custom:camera-timeline-card
  *   path_datetime_format: YYYYMMDD_HHmmss     # how times are read from the file names (required)
@@ -59,6 +63,20 @@ const STALE_MS = 30 * 60_000;
 const REPLAN_MS = 45 * 60_000;
 const PRELOAD_CONCURRENCY = 4;
 const VIDEO_RE = /\.(mp4|webm|mov|m4v)$/i;
+
+/** The item closest in time to `t` (the earlier of two equally close), or null. */
+function closestItem(items, t) {
+  let best = null;
+  let gap = Infinity;
+  for (const it of items) {
+    const g = Math.abs(it.ms - t);
+    if (g < gap) {
+      gap = g;
+      best = it;
+    }
+  }
+  return best;
+}
 const KIND_ICON = {
   person: "mdi:walk",
   car: "mdi:car",
@@ -482,6 +500,48 @@ export class CameraTimelineCard extends LitElement {
     this._navigate(path);
   }
 
+  /** The full view's next (1) / previous (-1) camera with a frame that day, at the moment `time` (default: the
+   * view's); `stream` carries on streaming where the camera has an NVR channel. Returns whether it moved. */
+  _overlaySwipe(dir, { time, stream } = {}) {
+    const o = this._overlay;
+    const cams = this.config?.cameras ?? [];
+    if (!o || cams.length < 2) return false;
+    const t = Number.isFinite(time) ? time : o.t;
+    const keep = stream ?? o.nvr ?? o.carry ?? null;
+    for (let step = 1; step < cams.length; step++) {
+      const ci = (((o.ci + dir * step) % cams.length) + cams.length) % cams.length;
+      const item = closestItem(this._tracks[ci] ?? [], t);
+      if (!item) continue;
+      const nvr = keep && nvrChannelOf(cams[ci]?.nvr_channel) !== null ? keep : null;
+      this._overlay = { ci, item, t, nvr, carry: keep && !nvr ? keep : null };
+      return true;
+    }
+    return false;
+  }
+
+  /** A horizontal swipe on the full view's picture (not on a video's own controls, at its bottom). */
+  _mediaDown(e) {
+    if (e.isPrimary === false) return;
+    const r = e.currentTarget.getBoundingClientRect?.();
+    if (
+      e.currentTarget.tagName === "VIDEO" &&
+      r &&
+      e.clientY > r.bottom - Math.max(48, r.height * 0.25)
+    )
+      return;
+    this._mediaSwipe = { x: e.clientX, y: e.clientY, t: performance.now() };
+  }
+
+  _mediaUp(e) {
+    const g = this._mediaSwipe;
+    this._mediaSwipe = null;
+    if (!g) return;
+    const dx = e.clientX - g.x;
+    const dy = e.clientY - g.y;
+    if (Math.abs(dx) >= 50 && Math.abs(dx) > 1.5 * Math.abs(dy) && performance.now() - g.t < 900)
+      this._overlaySwipe(dx < 0 ? 1 : -1);
+  }
+
   _navigate(path) {
     if (!path) return;
     window.history.pushState(null, "", path);
@@ -729,13 +789,20 @@ export class CameraTimelineCard extends LitElement {
                 .addon=${this.config.nvr_addon || DEFAULT_NVR_ADDON}
                 .poster=${preview}
                 .bare=${true}
+                .label=${cam?.name || ""}
                 @nvr-close=${() => setNvr(null)}
                 @nvr-stream=${(e) => setNvr(e.detail.stream)}
+                @nvr-swipe=${(e) => {
+                  if (this._overlaySwipe(e.detail.dir, e.detail)) e.preventDefault();
+                }}
               ></cgc-nvr-player>
             </div>`
           : VIDEO_RE.test(item.src)
             ? html`<video
                 class="tl-overlay-media"
+                @pointerdown=${(e) => this._mediaDown(e)}
+                @pointerup=${(e) => this._mediaUp(e)}
+                @pointercancel=${() => (this._mediaSwipe = null)}
                 src=${item.src}
                 poster=${preview}
                 controls
@@ -745,6 +812,10 @@ export class CameraTimelineCard extends LitElement {
               ></video>`
             : html`<img
                 class="tl-overlay-media"
+                draggable="false"
+                @pointerdown=${(e) => this._mediaDown(e)}
+                @pointerup=${(e) => this._mediaUp(e)}
+                @pointercancel=${() => (this._mediaSwipe = null)}
                 src=${item.src}
                 alt=""
                 style=${preview ? `background-image:url("${preview}")` : ""}

@@ -212,6 +212,7 @@ export interface InputConfig {
   nvr_channel?: number;
   nvr_addon?: string;
   nvr_autoplay?: boolean;
+  swipe_cameras?: { gallery_id?: string; navigation_path?: string; name?: string }[];
   pill_size?: number;
   row_gap?: number;
   card_height?: number;

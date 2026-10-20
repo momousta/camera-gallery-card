@@ -305,6 +305,8 @@ export const timelineStyles = css`
     background: #000;
   }
   .tl-overlay-media {
+    touch-action: pan-y; /* a horizontal swipe goes to the next camera */
+    user-select: none;
     width: 100%;
     max-height: 75vh;
     aspect-ratio: 16 / 9;

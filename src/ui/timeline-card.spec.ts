@@ -381,3 +381,95 @@ describe("NVR recording in the full view (BL-008)", () => {
     expect(btnTexts(card)).not.toContain("High");
   });
 });
+
+describe("swiping between cameras in the full view (owner fork)", () => {
+  const swipeOn = async (card: any, el: Element, dx: number, y = 100) => {
+    const ev = (type: string, x: number) =>
+      new MouseEvent(type, { bubbles: true, composed: true, clientX: x, clientY: y });
+    el.dispatchEvent(ev("pointerdown", 200));
+    el.dispatchEvent(ev("pointerup", 200 + dx));
+    await card.updateComplete;
+  };
+  const media = (card: any) => $(card, ".tl-overlay .tl-overlay-media");
+  const swipeEvent = (detail: Record<string, unknown>) =>
+    new CustomEvent("nvr-swipe", { detail, bubbles: true, composed: true, cancelable: true });
+
+  it("a swipe on the frame shows the next camera's frame closest to the moment, round the cameras", async () => {
+    const card = await render();
+    card._setT(at(13, 40));
+    await card.updateComplete;
+    $$(card, ".tl-tile")[0]!.click();
+    await card.updateComplete;
+    expect(card._overlay.item.src).toBe(L("front", "motion_20261019_133000.gif"));
+    await swipeOn(card, media(card)!, -150);
+    expect([card._overlay.ci, card._overlay.item.src]).toEqual([
+      1,
+      L("back", "person_20261019_090000.gif"),
+    ]);
+    await swipeOn(card, media(card)!, -150);
+    // The doorbell: 13:55 is closer to 13:40 than 13:10.
+    expect([card._overlay.ci, card._overlay.item.src]).toEqual([
+      2,
+      L("door", "snapshot_20261019_135500.jpg"),
+    ]);
+    expect($(card, ".tl-overlay-head")!.textContent).toContain("Doorbell");
+    await swipeOn(card, media(card)!, -150); // round to the first
+    expect(card._overlay.ci).toBe(0);
+    await swipeOn(card, media(card)!, 150); // and back
+    expect(card._overlay.ci).toBe(2);
+    await swipeOn(card, media(card)!, -30); // too short
+    expect(card._overlay.ci).toBe(2);
+  });
+
+  it("streaming, the next camera streams from the moment on screen in that quality; one without a channel shows its frame and passes the stream on", async () => {
+    const cams = CONFIG.cameras.map((c, i) =>
+      i === 0 ? { ...c, nvr_channel: 6 } : i === 1 ? { ...c, nvr_channel: 0 } : c
+    );
+    const card = await render({ cameras: cams });
+    card._setT(at(13, 40));
+    await card.updateComplete;
+    $$(card, ".tl-tile")[0]!.click();
+    await card.updateComplete;
+    $$(card, ".tl-overlay .tl-btn")
+      .find((b) => b.textContent!.trim() === "High")!
+      .click();
+    await card.updateComplete;
+    let player = $(card, ".tl-overlay-nvr cgc-nvr-player");
+    expect(player.label).toBe("Front");
+    const ev = swipeEvent({ dir: 1, time: at(13, 41), stream: "main", fullscreen: false });
+    player.dispatchEvent(ev);
+    await card.updateComplete;
+    expect(ev.defaultPrevented).toBe(true);
+    player = $(card, ".tl-overlay-nvr cgc-nvr-player");
+    expect([player.channel, player.time, player.stream, player.label]).toEqual([
+      0,
+      at(13, 41),
+      "main",
+      "Back",
+    ]);
+    player.dispatchEvent(swipeEvent({ dir: 1, time: at(13, 42), stream: "main" }));
+    await card.updateComplete;
+    expect($(card, "cgc-nvr-player")).toBeNull(); // the doorbell has no recordings: its closest frame
+    expect(card._overlay).toMatchObject({ ci: 2, nvr: null, carry: "main", t: at(13, 42) });
+    expect(card._overlay.item.src).toBe(L("door", "snapshot_20261019_135500.jpg"));
+    await swipeOn(card, media(card)!, -150); // on to the first camera: streaming again, from the same moment
+    player = $(card, ".tl-overlay-nvr cgc-nvr-player");
+    expect([player.channel, player.time, player.stream]).toEqual([6, at(13, 42), "main"]);
+  });
+
+  it("a swipe that starts on a video's own controls (its bottom) is left to them", async () => {
+    const card = await render();
+    card._setT(at(13, 20));
+    await card.updateComplete;
+    $$(card, ".tl-tile")[2]!.click(); // the doorbell's 13:10 clip
+    await card.updateComplete;
+    const video = media(card)!;
+    expect(video.tagName).toBe("VIDEO");
+    video.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 225, height: 225, left: 0, right: 400, width: 400 }) as DOMRect;
+    await swipeOn(card, video, -150, 210);
+    expect(card._overlay.ci).toBe(2);
+    await swipeOn(card, video, -150, 100);
+    expect(card._overlay.ci).toBe(0);
+  });
+});

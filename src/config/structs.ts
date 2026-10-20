@@ -328,6 +328,13 @@ const ptzCamera = type({
 });
 
 /** Menu button entry — same strictness rationale as `liveStreamUrlEntry`. */
+/** Owner fork: a camera of `swipe_cameras` (the timeline's `cameras` shape; other keys pass). */
+const swipeCameraEntry = type({
+  gallery_id: optional(string()),
+  navigation_path: optional(string()),
+  name: optional(string()),
+});
+
 const menuButton = object({
   entity: nonEmptyString,
   icon: nonEmptyString,
@@ -535,6 +542,9 @@ export const cameraGalleryCardConfigStruct = type({
   nvr_addon: defaulted(string(), DEFAULT_NVR_ADDON),
   // BL-008: letting the scrolled strip come to rest plays the NVR's Low stream of that moment, quietly.
   nvr_autoplay: defaulted(boolean(), true),
+  // Owner fork: the cameras in order (each `gallery_id` = a gallery's `url_id`, `navigation_path` = its page). A
+  // swipe on the picture goes to the next / previous one at the same moment (streaming on when it was).
+  swipe_cameras: optional(array(swipeCameraEntry)),
   pill_size: defaulted(intInRange(PILL_SIZE_MIN, PILL_SIZE_MAX), PILL_SIZE_DEFAULT),
   row_gap: defaulted(intInRange(ROW_GAP_MIN, ROW_GAP_MAX), ROW_GAP_DEFAULT),
   card_height: defaulted(intInRange(CARD_HEIGHT_MIN, CARD_HEIGHT_MAX), CARD_HEIGHT_DEFAULT),

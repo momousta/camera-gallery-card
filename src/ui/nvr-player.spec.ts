@@ -594,11 +594,14 @@ describe("<cgc-nvr-player>", () => {
       await el.updateComplete;
     }
 
-    /** A player that plays: 30 minutes long, at 753 s; `paused` is the test's to set. */
-    async function playing(props: Record<string, unknown> = {}) {
-      installFetch(happyRoute({ engine: "replay", state: "streaming" }));
+    /** A player that plays: 30 minutes long, at 753 s; `paused` is the test's to set. `extra` answers the add-on
+     * calls the test adds (clips, snapshots); the calls are in `calls`. */
+    let calls: Call[] = [];
+    async function playing(props: Record<string, unknown> = {}, extra?: Route, engine = "replay") {
+      const base = happyRoute({ engine, state: "streaming" });
+      calls = installFetch((u, i) => extra?.(u, i) ?? base(u, i));
       const el = await mount(props);
-      await flush(200);
+      await flush(engine === "replay" ? 200 : 500); // the download engine's status polls are slower
       const v: any = video(el);
       const state = { paused: false, t: 753, muted: true };
       Object.defineProperty(v, "paused", { configurable: true, get: () => state.paused });
@@ -770,6 +773,227 @@ describe("<cgc-nvr-player>", () => {
       tap.dispatchEvent(ptr("pointerup", 31, 200, 140));
       el._fsChanged(); // leaving full screen (nothing is full screen in jsdom)
       expect(el._zoom.s).toBe(1);
+    });
+
+    describe("saved to the device", () => {
+      const CLIP = {
+        url: "export/k1/Front%20Right%202026-10-19%2015-12-33.mp4",
+        file: "Front Right 2026-10-19 15-12-33.mp4",
+      };
+      const SHOT = {
+        url: "export/k2/Front%20Right%202026-10-19%2015-12-33.jpg",
+        file: "Front Right 2026-10-19 15-12-33.jpg",
+      };
+      let downloads: { href: string | null; download: string; bubbles: boolean }[] = [];
+      const route =
+        (maxS = 900): Route =>
+        (url) => {
+          if (url === `${BASE}api/clip`) return { status: 200, body: { id: "clip1", max_s: maxS } };
+          if (url === `${BASE}api/clip/clip1/stop`)
+            return { status: 200, body: { ...CLIP, bytes: 9, seconds: 22 } };
+          if (url === `${BASE}api/clip/clip1/cancel`) return { status: 200, body: { ok: true } };
+          if (url.startsWith(`${BASE}api/save?`))
+            return { status: 200, body: { ...SHOT, bytes: 3 } };
+          return undefined;
+        };
+      const body = (url: string) => JSON.parse(calls.find((c) => c.url === url)!.init.body);
+      const at = async (el: any, v: any, state: any, t: number) => {
+        state.t = t;
+        v.dispatchEvent(new Event("timeupdate"));
+        await el.updateComplete;
+      };
+
+      beforeEach(() => {
+        downloads = [];
+        vi.spyOn(HTMLAnchorElement.prototype, "dispatchEvent").mockImplementation(function (
+          this: HTMLAnchorElement,
+          e: Event
+        ) {
+          downloads.push({
+            href: this.getAttribute("href"),
+            download: this.download,
+            bubbles: e.bubbles,
+          });
+          return true;
+        });
+      });
+
+      it("a snapshot posts the frame on screen and downloads the add-on's named file", async () => {
+        const ctx = {
+          drawImage: vi.fn(),
+          getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(256).fill(40) })),
+        };
+        vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as any);
+        vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(function (cb: any) {
+          cb(new Blob(["jpeg"], { type: "image/jpeg" }));
+        });
+        const { el, v } = await playing({ label: "Front Right" }, route());
+        Object.defineProperty(v, "videoWidth", { configurable: true, get: () => 896 });
+        Object.defineProperty(v, "videoHeight", { configurable: true, get: () => 512 });
+        q(el, ".nvr-shot").click();
+        await flush();
+        await el.updateComplete;
+        const save = calls.find((c) => c.url.startsWith(`${BASE}api/save?`))!;
+        const params = new URL(save.url, "http://x").searchParams;
+        expect([params.get("channel"), params.get("time"), params.get("title")]).toEqual([
+          "7",
+          String(FILE_START + 753_000),
+          "Front Right",
+        ]);
+        expect(save.init.method).toBe("POST");
+        expect(save.init.body).toBeInstanceOf(Blob);
+        expect(ctx.drawImage).toHaveBeenCalledWith(v, 0, 0, 896, 512);
+        expect(downloads).toEqual([
+          { href: `${BASE}${SHOT.url}`, download: SHOT.file, bubbles: false },
+        ]);
+        expect(q(el, ".nvr-toast").textContent).toContain(SHOT.file);
+
+        // A device that hands over only black: nothing is posted.
+        ctx.getImageData.mockReturnValue({ data: new Uint8ClampedArray(256) });
+        q(el, ".nvr-shot").click();
+        await flush();
+        await el.updateComplete;
+        expect(calls.filter((c) => c.url.startsWith(`${BASE}api/save?`))).toHaveLength(1);
+        expect(q(el, ".nvr-toast.err")).not.toBeNull();
+      });
+
+      it("records the stretches played (a skip starts a new one) and downloads the clip on stop", async () => {
+        const { el, v, state } = await playing({ label: "Front Right" }, route());
+        layout(el);
+        q(el, ".nvr-rec").click();
+        await flush();
+        await el.updateComplete;
+        expect(body(`${BASE}api/clip`)).toEqual({ name: NAME, client: el._client, from: 753 });
+        expect(q(el, ".nvr-recchip").textContent).toContain("REC 0:00");
+        expect(q(el, ".nvr-rec").getAttribute("aria-pressed")).toBe("true");
+        await at(el, v, state, 760);
+        await at(el, v, state, 770.5);
+        expect(q(el, ".nvr-recchip").textContent).toContain("REC 0:17");
+        await tapAt(el, 350, 110, 100); // a double tap: +10 s
+        await tapAt(el, 350, 110, 0);
+        expect(state.t).toBe(780.5);
+        v.dispatchEvent(new Event("seeking"));
+        await at(el, v, state, 786);
+        await vi.advanceTimersByTimeAsync(900);
+        q(el, ".nvr-rec").click();
+        await flush();
+        await el.updateComplete;
+        expect(body(`${BASE}api/clip/clip1/stop`)).toEqual({
+          ranges: [
+            [753, 770.5],
+            [780.5, 786],
+          ],
+          title: "Front Right",
+        });
+        expect(downloads).toEqual([
+          { href: `${BASE}${CLIP.url}`, download: CLIP.file, bubbles: false },
+        ]);
+        expect(q(el, ".nvr-recchip")).toBeNull();
+        expect(q(el, ".nvr-toast").textContent).toContain(CLIP.file);
+      });
+
+      it("saves the clip so far on Low / High, closing, or the longest a clip may be", async () => {
+        const { el, v, state } = await playing({}, route(10));
+        q(el, ".nvr-rec").click();
+        await flush();
+        await at(el, v, state, 758);
+        button(el, "High").click(); // a new start saves what was recorded
+        await flush();
+        expect(body(`${BASE}api/clip/clip1/stop`)).toEqual({ ranges: [[753, 758]], title: "" });
+
+        const p2 = await playing({}, route(10));
+        p2.el.shadowRoot.querySelector(".nvr-rec").click();
+        await flush();
+        await at(p2.el, p2.v, p2.state, 760);
+        await at(p2.el, p2.v, p2.state, 764); // 11 s: past the add-on's 10
+        await flush();
+        expect(body(`${BASE}api/clip/clip1/stop`)).toEqual({ ranges: [[753, 764]], title: "" });
+        expect(p2.el.shadowRoot.querySelector(".nvr-toast").textContent).toContain(
+          "0:10 is the longest"
+        );
+
+        const p3 = await playing({}, route());
+        p3.el.shadowRoot.querySelector(".nvr-rec").click();
+        await flush();
+        p3.el.shadowRoot.querySelector(".nvr-rec").click(); // stopped at once: nothing played
+        await flush();
+        expect(calls.some((c) => c.url === `${BASE}api/clip/clip1/cancel`)).toBe(true);
+        expect(calls.some((c) => c.url === `${BASE}api/clip/clip1/stop`)).toBe(false);
+      });
+
+      it("records only on the NVR's replay; a snapshot works on both engines", async () => {
+        const { el } = await playing({}, route(), "download");
+        expect(q(el, ".nvr-rec")).toBeNull();
+        expect(q(el, ".nvr-shot")).not.toBeNull();
+      });
+    });
+
+    describe("a swipe along the picture", () => {
+      const swipe = async (el: any, from: [number, number], to: [number, number]) => {
+        const id = nextId++;
+        const tap = q(el, ".nvr-tap");
+        tap.dispatchEvent(ptr("pointerdown", id, ...from));
+        tap.dispatchEvent(ptr("pointermove", id, (from[0] + to[0]) / 2, (from[1] + to[1]) / 2));
+        tap.dispatchEvent(ptr("pointermove", id, ...to));
+        tap.dispatchEvent(ptr("pointerup", id, ...to));
+        await el.updateComplete;
+      };
+      const listen = (el: any, handled = false) => {
+        const got: any[] = [];
+        el.addEventListener("nvr-swipe", (e: CustomEvent) => {
+          got.push(e.detail);
+          if (handled) e.preventDefault();
+        });
+        return got;
+      };
+
+      it("asks the host for the next or previous camera, at the moment on screen, in the same quality", async () => {
+        const { el } = await playing();
+        layout(el);
+        const got = listen(el);
+        await swipe(el, [300, 100], [150, 110]); // to the left: next
+        await swipe(el, [100, 100], [260, 90]); // to the right: previous
+        expect(got).toEqual([
+          { dir: 1, time: FILE_START + 753_000, stream: "sub", fullscreen: false },
+          { dir: -1, time: FILE_START + 753_000, stream: "sub", fullscreen: false },
+        ]);
+        await swipe(el, [200, 40], [215, 200]); // up or down the picture: the page scrolls
+        await swipe(el, [200, 100], [170, 100]); // too short
+        expect(got).toHaveLength(2);
+        el._setZoom(2, 0, 0); // zoomed: the finger pans
+        await swipe(el, [300, 100], [150, 100]);
+        expect(got).toHaveLength(2);
+        expect(el._zoom.x).toBeLessThan(0);
+      });
+
+      it("follows the turned picture in full screen, and a handled swipe saves the clip being recorded", async () => {
+        const { el, v, state } = await playing({}, (url) =>
+          url === `${BASE}api/clip`
+            ? { status: 200, body: { id: "c9", max_s: 900 } }
+            : url === `${BASE}api/clip/c9/stop`
+              ? { status: 200, body: { url: "export/a/b.mp4", file: "b.mp4" } }
+              : undefined
+        );
+        layout(el);
+        vi.spyOn(HTMLAnchorElement.prototype, "dispatchEvent").mockReturnValue(true);
+        vi.stubGlobal("matchMedia", (m: string) => ({ matches: m.includes("portrait") }));
+        el._fullscreen = true;
+        el._rot = 90;
+        const got = listen(el);
+        await swipe(el, [200, 40], [200, 190]); // down the screen = to the turned picture's right: previous
+        expect(got.map((d) => [d.dir, d.fullscreen])).toEqual([[-1, true]]);
+        q(el, ".nvr-rec").click();
+        await flush();
+        state.t = 760;
+        v.dispatchEvent(new Event("timeupdate"));
+        await swipe(el, [200, 190], [200, 40]); // nobody moved to another camera: still recording
+        expect(el._rec).not.toBeNull();
+        listen(el, true);
+        await swipe(el, [200, 190], [200, 40]);
+        await flush();
+        expect(el._rec).toBeNull();
+        expect(calls.some((c) => c.url === `${BASE}api/clip/c9/stop`)).toBe(true);
+      });
     });
 
     it("times read m:ss, or h:mm:ss from an hour", () => {

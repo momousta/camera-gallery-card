@@ -322,6 +322,9 @@ class CameraGalleryCard extends LitElement {
     this._selectedPreviewSrc = "";
     // BL-008: { src, time, channel, stream, addon, poster } while the NVR recording of the selected item plays.
     this._nvr = null;
+    // Swiped here streaming onto a camera without an NVR channel (the doorbell): its snapshot shows, and a swipe
+    // on (while it stays selected) streams again.
+    this._carry = null;
     this._deleted = new Set();
     this._deletedFrigateEventIds = new Set();
     // Clean up legacy NEW-arrival localStorage from prior builds. The
@@ -3669,21 +3672,94 @@ class CameraGalleryCard extends LitElement {
     return nvrChannelOf(this.config?.nvr_channel);
   }
 
-  /** quiet: started by the strip coming to rest (the player loads unseen and shows itself once it plays). */
-  _startNvr(src, dtMs, stream, { quiet = false } = {}) {
+  /** quiet: started by the strip coming to rest (the player loads unseen and shows itself once it plays).
+   * at: the moment to start from (default: the item's); carried: a swipe brought the stream here; fullscreen: and
+   * it was full screen. */
+  _startNvr(src, dtMs, stream, { quiet = false, at = null, carried = false, fullscreen = false } = {}) {
     const channel = this._nvrChannel();
     if (channel === null || !src || !Number.isFinite(dtMs)) return;
     if (!quiet) this._pausePreviewClip();
     const poster = this._sidecarFor(src) || (this._isVideoSmart(src) ? "" : src);
     this._nvr = {
       src,
-      time: dtMs,
+      time: Number.isFinite(at) ? at : dtMs,
       channel,
       stream,
       addon: String(this.config?.nvr_addon || DEFAULT_NVR_ADDON),
       poster,
       quiet,
+      carried,
+      fullscreen,
     };
+  }
+
+  // ─── Owner fork: swiping between cameras (`swipe_cameras`) ─────────
+
+  /** The configured cameras that can be opened: a gallery `url_id` and its page. */
+  _swipeCameras() {
+    const list = Array.isArray(this.config?.swipe_cameras) ? this.config.swipe_cameras : [];
+    return list.filter(
+      (c) =>
+        typeof c?.gallery_id === "string" &&
+        c.gallery_id.trim() &&
+        typeof c?.navigation_path === "string" &&
+        c.navigation_path.trim()
+    );
+  }
+
+  /** This camera's name in `swipe_cameras` (for saved files); empty: the add-on names it after the NVR. */
+  _cameraLabel() {
+    const me = this._swipeCameras().find((c) => c.gallery_id.trim() === this.config?.url_id);
+    return typeof me?.name === "string" ? me.name : "";
+  }
+
+  /** Go to the next (1) or previous (-1) camera's gallery at `time`: its closest snapshot, or (stream) its NVR
+   * recording from that moment in that quality. Replaces this page in the history, as photos do. */
+  _goToCamera(dir, { time, stream = null, fullscreen = false } = {}) {
+    const list = this._swipeCameras();
+    const me = list.findIndex((c) => c.gallery_id.trim() === this.config?.url_id);
+    if (me < 0 || list.length < 2 || !Number.isFinite(time)) return false;
+    const next = list[(me + dir + list.length) % list.length];
+    const q = new URLSearchParams({
+      cgc_id: next.gallery_id.trim(),
+      cgc_view: "gallery",
+      cgc_time: String(Math.round(time)),
+      cgc_near: "1",
+    });
+    if (stream === "sub" || stream === "main") q.set("cgc_nvr", stream);
+    if (stream && fullscreen) q.set("cgc_fs", "1");
+    const path = next.navigation_path.trim();
+    this._stopNvr();
+    window.history.replaceState(window.history.state, "", `${path}${path.includes("?") ? "&" : "?"}${q}`);
+    window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: true } }));
+    return true;
+  }
+
+  /** What a swipe on the picture carries: the stream (and its moment) when one plays or was swiped here, else the
+   * selected item's moment. A quiet start that hasn't shown itself yet is a snapshot still. */
+  _swipeContext() {
+    const item = this._selectedItem();
+    const n = this._nvr;
+    if (n && (n.carried || !n.quiet || n.revealed)) {
+      const player = this.renderRoot?.querySelector(".preview cgc-nvr-player");
+      const clock = player?._clock;
+      return { time: Number.isFinite(clock) ? clock : n.time, stream: n.stream, fullscreen: false };
+    }
+    if (this._carry && item?.src === this._carry.src)
+      return { time: this._carry.time, stream: this._carry.stream, fullscreen: false };
+    return { time: item?.dtMs, stream: null, fullscreen: false };
+  }
+
+  /** Arrived by a swipe that was streaming: stream on from the moment, or (no NVR channel) keep the stream to pass
+   * on from the closest snapshot. */
+  _arriveStreaming(item, at, stream, fullscreen) {
+    if (!item?.src || !Number.isFinite(at)) return;
+    if (this._nvrChannel() === null) {
+      this._carry = { src: item.src, time: at, stream };
+      return;
+    }
+    this._carry = null;
+    this._startNvr(item.src, item.dtMs, stream, { quiet: !fullscreen, at, carried: true, fullscreen });
   }
 
   /** The clip under the player would keep playing (and talking) otherwise. */
@@ -3979,8 +4055,14 @@ class CameraGalleryCard extends LitElement {
     }
     const hops = target.hops ?? 0;
     if (entry.dayKey && entry.dayKey !== base.activeDay && hops < 2) {
-      // Its day first; the next update selects it in that day's strip.
-      this._pendingUrlTarget = { src: entry.src, time: entry.dtMs ?? target.time, hops: hops + 1 };
+      // Its day first; the next update selects it in that day's strip (the swipe's moment and stream kept).
+      this._pendingUrlTarget = {
+        ...target,
+        src: entry.src,
+        time: entry.dtMs ?? target.time,
+        at: target.at ?? target.time,
+        hops: hops + 1,
+      };
       this._selectedDay = entry.dayKey;
       return;
     }
@@ -3990,6 +4072,8 @@ class CameraGalleryCard extends LitElement {
       this._selectedIndex = i;
       this._pendingScrollToI = i;
     }
+    this._carry = null;
+    if (target.nvr && i >= 0) this._arriveStreaming(filtered[i], target.at ?? target.time, target.nvr, !!target.fs);
   }
 
   _setViewMode(nextMode) {
@@ -5498,6 +5582,9 @@ class CameraGalleryCard extends LitElement {
     if (Math.abs(dx) < 45) return;
     if (this._selectMode) return;
 
+    // Owner fork: with `swipe_cameras`, a swipe goes to the next / previous camera at the same moment.
+    if (this._goToCamera(dx < 0 ? 1 : -1, this._swipeContext())) return;
+
     if (dx < 0) {
       if ((this._selectedIndex ?? 0) < listLen - 1) {
         this._selectedIndex = (this._selectedIndex ?? 0) + 1;
@@ -6295,7 +6382,13 @@ class CameraGalleryCard extends LitElement {
 
     // BL-008: the NVR player belongs to the item it was started on; browsing away (or going live) closes it.
     const nvrOn = !!this._nvr && !isLive && this._nvr.src === selected;
-    if (this._nvr && !nvrOn) Promise.resolve().then(() => this._stopNvr());
+    if (this._nvr && !nvrOn) {
+      // Only that stream: a swipe's arrival may have started another one by then (a day switch renders between).
+      const stale = this._nvr;
+      Promise.resolve().then(() => {
+        if (this._nvr === stale) this._stopNvr();
+      });
+    }
 
     const previewBlock = showPreviewSection
       ? html`
@@ -6364,8 +6457,18 @@ class CameraGalleryCard extends LitElement {
                   .addon=${this._nvr.addon}
                   .poster=${this._nvr.poster}
                   .quiet=${!!this._nvr.quiet}
+                  .fullscreen=${!!this._nvr.fullscreen}
+                  .label=${this._cameraLabel()}
                   @nvr-close=${() => this._stopNvr()}
-                  @nvr-reveal=${() => this._pausePreviewClip()}
+                  @nvr-reveal=${() => {
+                    if (this._nvr) this._nvr.revealed = true;
+                    this._pausePreviewClip();
+                  }}
+                  @nvr-swipe=${(e) => {
+                    const d = e.detail || {};
+                    if (this._goToCamera(d.dir, { time: d.time, stream: d.stream, fullscreen: d.fullscreen }))
+                      e.preventDefault();
+                  }}
                   @nvr-stream=${(e) => {
                     if (this._nvr) this._nvr = { ...this._nvr, stream: e.detail.stream, quiet: false };
                   }}

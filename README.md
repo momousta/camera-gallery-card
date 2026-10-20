@@ -189,7 +189,23 @@ the selected item's moment:
   Ctrl + wheel zooms too;
 - full screen is landscape: Chrome turns the screen. In an app's WebView (the Home Assistant app), where a page
   can't turn the screen, the picture is turned while the screen is portrait; hold the phone sideways. The seek
-  bar, the double taps and the zoom follow the turned picture. iPhones use their own player.
+  bar, the double taps and the zoom follow the turned picture. iPhones use their own player;
+- **saved to the phone** (NVR Playback add-on 0.4.0+): the camera button saves the frame on screen as a JPEG; the
+  record button records what plays until you stop it (a red REC chip shows the clip's length) and saves an MP4.
+  The clip is the camera's own stream, cut by the add-on from what it already sent, so it's ready as soon as you
+  stop. Seeks and skips while recording are cuts; pauses aren't recorded. Switching Low / High, the next
+  recording or closing the player saves the clip so far. Clips are at most 15 minutes in Low and 5 in High. Files
+  are named `<camera> <date> <time>` (the NVR's local time, as printed on the picture) and carry that time, so
+  galleries file them under the moment they show. They download from the add-on, so the Home Assistant app keeps
+  their names (Android: Downloads).
+
+**Swiping between cameras** (`swipe_cameras`): a swipe left / right on the picture opens the next / previous
+camera of the list at the same moment, replacing the page (Back goes where you came from). While a recording
+plays, that camera plays its recording from the moment on screen, in the same quality, and full screen stays full
+screen. Otherwise it shows its snapshot closest to the moment. A camera without `nvr_channel` (a doorbell) shows
+its closest snapshot, and swiping on from it streams again. The list has the timeline card's `cameras` shape
+(`gallery_id` = each gallery's `url_id`, `navigation_path` = its page), so one YAML anchor serves both. The
+timeline's full view swipes between its cameras the same way.
 
 The Vehicle Intelligence card's **Recording** button opens this same player (`<cgc-nvr-player>`, defined by this
 bundle), so it has the same controls and gestures, with that card's own Low / High and back button above it.
@@ -388,6 +404,7 @@ data:
 | `nvr_channel` | The camera's channel on a Reolink NVR. Adds **Low** / **High** pills that play the NVR's recording from the selected item's moment, through the NVR Playback add-on (default off) |
 | `nvr_addon` | That add-on's slug (default `local_nvr_playback`) |
 | `nvr_autoplay` | With `scrub_on_drag`, letting the scrolled strip come to rest plays the Low stream of that moment, quietly (default `true`) |
+| `swipe_cameras` | The cameras in order, as the timeline card's `cameras` (`gallery_id`, `navigation_path`, `name`): a swipe on the picture opens the next / previous one at the same moment. `name` names saved files. This card must be in the list (its `url_id`) |
 | `bar_position` | Preview timestamp bar position |
 | `bar_opacity` | Preview timestamp bar opacity |
 | **Live view** | |

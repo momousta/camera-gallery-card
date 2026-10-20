@@ -6,11 +6,20 @@
  *   hass, channel (NVR channel), time (epoch ms to start at), stream ("sub" = Low, "main" = High),
  *   addon (add-on slug, default local_nvr_playback), poster (picture shown while the recording is fetched),
  *   bare (true where the host shows its own Low / High and close buttons: then the bar is the clock and full
- *   screen), quiet (load unseen: no progress, no error; the player shows itself once the video plays)
+ *   screen), quiet (load unseen: no progress, no error; the player shows itself once the video plays),
+ *   label (the camera's name for saved files; without it the add-on uses the NVR's channel name),
+ *   fullscreen (start in full screen: the viewer swiped here from a full-screen player)
  * Events (bubbling, composed):
  *   nvr-close: the viewer asked to go back to the snapshots; { quiet: true } when a quiet start failed
  *   nvr-stream: { stream } the viewer switched between Low and High
  *   nvr-reveal: a quiet player started playing and showed itself
+ *   nvr-swipe: { dir: 1 next | -1 previous, time: epoch ms on screen, stream, fullscreen } a horizontal swipe on
+ *     the picture (cancelable: a host that moves to another camera calls preventDefault, and a clip being
+ *     recorded is saved)
+ *
+ * Saved to the device (add-on 0.4.0+): the snapshot button posts the frame on screen; the record button records
+ * a clip of what is played (the stretches, in order; a seek or a skip starts a new one) and the add-on cuts it
+ * from what it already sent. Both download from the add-on, so the Home Assistant app keeps their names.
  *
  * The add-on asks the NVR for the moment (or, as a fallback, downloads the recording up to it, with progress
  * over the poster). This element plays the add-on's HLS stream from the moment with native HLS (Safari, iOS)
@@ -54,6 +63,9 @@ const TAP_MS = 300; // a second tap within this is a double tap (so a single tap
 const SKIP_S = 10; // a double tap on a side: back or forward this much
 const STREAK_MS = 800; // after a double tap, each tap on the same side within this skips again
 const MAX_ZOOM = 8;
+const SWIPE_MIN_PX = 50; // a horizontal swipe on the picture: at least this far (and 12 % of its width)
+const SWIPE_MS = 900; // and no slower
+const TOAST_MS = 2600;
 
 let session = new IngressSession();
 let locator = new AddonLocator();
@@ -141,6 +153,35 @@ export function fmtTime(s) {
   return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
 }
 
+const round3 = (x) => Math.round(x * 1000) / 1000;
+
+/** Seconds a clip being recorded holds (the stretches played). */
+function recordedSeconds(rec) {
+  return rec.ranges.reduce((n, [a, b]) => n + Math.max(0, b - a), 0);
+}
+
+/** The frame on screen as a JPEG at the video's own size; null when the device hands over only black. */
+async function frameJpeg(video) {
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  if (blankFrame(video)) return null;
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+}
+
+/** Whether the video hands over a black frame only (a device that won't share decoded pictures). */
+function blankFrame(video) {
+  const c = document.createElement("canvas");
+  c.width = 8;
+  c.height = 8;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(video, 0, 0, 8, 8);
+  const d = ctx.getImageData(0, 0, 8, 8).data;
+  for (let i = 0; i < d.length; i += 4) if (d[i] || d[i + 1] || d[i + 2]) return false;
+  return true;
+}
+
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
@@ -164,6 +205,8 @@ export class CgcNvrPlayer extends LitElement {
       poster: { type: String },
       bare: { type: Boolean },
       quiet: { type: Boolean, reflect: true },
+      label: { type: String },
+      fullscreen: { type: Boolean },
       _phase: { state: true },
       _status: { state: true },
       _error: { state: true },
@@ -182,6 +225,9 @@ export class CgcNvrPlayer extends LitElement {
       _drag: { state: true },
       _zoom: { state: true },
       _skip: { state: true },
+      _rec: { state: true },
+      _toast: { state: true },
+      _flash: { state: true },
     };
   }
 
@@ -199,6 +245,14 @@ export class CgcNvrPlayer extends LitElement {
     this.poster = "";
     this.bare = false;
     this.quiet = false;
+    this.label = "";
+    this.fullscreen = false;
+    this._detached = false;
+    this._resumeAt = null;
+    this._rec = null; // a clip being recorded: { id, ranges: [[from, to] s], started (promise), maxS }
+    this._toast = null; // { text, kind: ok | err | busy }
+    this._toastTimer = 0;
+    this._flash = false;
     this._revealed = false;
     this._fullscreen = false;
     this._rot = 90;
@@ -243,6 +297,11 @@ export class CgcNvrPlayer extends LitElement {
     super.connectedCallback();
     document.addEventListener("fullscreenchange", this._onFsChange);
     document.addEventListener("webkitfullscreenchange", this._onFsChange);
+    if (this._detached) {
+      // Shown again (Home Assistant re-attaches a cached view): start again where it was.
+      this._detached = false;
+      this._phase = "idle";
+    }
   }
 
   disconnectedCallback() {
@@ -253,8 +312,14 @@ export class CgcNvrPlayer extends LitElement {
     clearTimeout(this._hideTimer);
     clearTimeout(this._tapTimer);
     clearTimeout(this._skipTimer);
+    clearTimeout(this._toastTimer);
+    this._finishRecording();
     this._teardown();
     this._leftFullscreen();
+    if (this._phase !== "idle") {
+      this._detached = true;
+      this._resumeAt = this._clock;
+    }
   }
 
   updated() {
@@ -266,13 +331,19 @@ export class CgcNvrPlayer extends LitElement {
     if (!this.hass || !Number.isInteger(this.channel) || !Number.isFinite(this.time)) return;
     if (changed.has("channel") || changed.has("time") || changed.has("addon")) {
       this._active = isNvrStream(this.stream) ? this.stream : "sub";
+      this._resumeAt = null;
       this._begin(this.time);
     } else if (changed.has("stream") && isNvrStream(this.stream) && this.stream !== this._active) {
       this._active = this.stream;
       this._begin(this._clock ?? this.time);
     } else if (this._phase === "idle") {
-      this._begin(this.time);
+      this._begin(this._resumeAt ?? this.time);
     }
+  }
+
+  firstUpdated() {
+    // Swiped here from full screen: the swipe's touch still allows asking for it (a few seconds).
+    if (this.fullscreen) this._enterFullscreen();
   }
 
   // ── flow ────────────────────────────────────────────────────────────
@@ -281,6 +352,7 @@ export class CgcNvrPlayer extends LitElement {
     // The NVR has nothing newer than a few seconds ago; start a little before "now" so there is something to see.
     atMs = Math.min(atMs, Date.now() - LIVE_EDGE_MS);
     const run = ++this._run;
+    this._finishRecording(); // a new start (Low / High, the next recording, Try again) saves the clip so far
     this._teardown();
     this._resetZoom();
     this._phase = "starting";
@@ -304,6 +376,7 @@ export class CgcNvrPlayer extends LitElement {
 
   /** Stop and show why; a quiet start that never showed itself asks the host to drop it instead. */
   _fail(code, message) {
+    this._finishRecording();
     this._teardown();
     this._phase = "error";
     this._errorCode = code;
@@ -554,6 +627,7 @@ export class CgcNvrPlayer extends LitElement {
     this._buf = bufferedEnd(video);
     if (!this._status) return;
     this._clock = clockAt(this._status, video.currentTime);
+    if (this._rec) this._trackRecording(video.currentTime);
     if (!video.paused) {
       if (this._phase === "buffering") this._phase = "playing";
       this._reveal();
@@ -694,6 +768,7 @@ export class CgcNvrPlayer extends LitElement {
           t0: performance.now(),
           moved: true,
           pan: { ...this._zoom },
+          afterPinch: true,
         };
       } else if (!this._ptrs.size) {
         this._gest = null;
@@ -701,6 +776,15 @@ export class CgcNvrPlayer extends LitElement {
       return;
     }
     if (!this._ptrs.size) this._gest = null;
+    if (g.moved && !g.afterPinch && this._zoom.s <= 1 && e.type !== "pointercancel") {
+      // Not zoomed, a finger moving along the picture (in its own frame, turned or not) is a swipe.
+      const f = this._frame();
+      const [fx, fy] = unturn(e.clientX - g.x0, e.clientY - g.y0, this._turn());
+      const far = Math.abs(fx) >= Math.max(SWIPE_MIN_PX, (f?.w || 0) * 0.12);
+      if (far && Math.abs(fx) > 1.5 * Math.abs(fy) && performance.now() - g.t0 < SWIPE_MS)
+        this._swipe(fx < 0 ? 1 : -1);
+      return;
+    }
     if (e.type === "pointercancel" || g.moved || performance.now() - g.t0 > 500) return;
     this._tapAt(e.clientX, e.clientY);
   }
@@ -901,7 +985,159 @@ export class CgcNvrPlayer extends LitElement {
   }
 
   _close() {
+    this._finishRecording();
     this.dispatchEvent(new CustomEvent("nvr-close", { bubbles: true, composed: true }));
+  }
+
+  // ── saved to the device: snapshots and clips ────────────────────────
+
+  /** The frame on screen, as the add-on's download (named "<camera> <date> <time>.jpg", with its EXIF date). */
+  async _snapshot() {
+    const video = this._video();
+    if (!video?.videoWidth || !this._status) {
+      this._showToast("There's no picture to save yet.", "err");
+      return;
+    }
+    const at = clockAt(this._status, video.currentTime);
+    const blob = await frameJpeg(video).catch(() => null);
+    if (!blob) {
+      this._showToast("This device didn't hand over the picture to save.", "err");
+      return;
+    }
+    this._flash = true;
+    setTimeout(() => (this._flash = false), 350);
+    this._showToast("Saving the snapshot…", "busy", 0);
+    try {
+      const q = new URLSearchParams({
+        channel: String(this.channel),
+        time: String(Math.round(at)),
+      });
+      if (this.label) q.set("title", this.label);
+      const r = await fetch(`${this._base}api/save?${q}`, {
+        method: "POST",
+        headers: { "Content-Type": "image/jpeg" },
+        body: blob,
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const data = await r.json().catch(() => null);
+      if (!r.ok || !data?.url) throw new Error(data?.message || `The add-on answered ${r.status}.`);
+      this._download(data.url, data.file);
+      this._showToast(`Saved · ${data.file}`, "ok");
+    } catch (err) {
+      this._showToast(`The snapshot wasn't saved: ${messageOf(err)}`, "err");
+    }
+  }
+
+  _toggleRecord() {
+    if (this._rec) this._finishRecording();
+    else this._startRecording();
+    this._showUi();
+  }
+
+  /** From the moment on screen, the add-on keeps what is played; the stop sends the stretches played. */
+  _startRecording() {
+    const video = this._video();
+    if (!video || this._phase !== "playing" || !this._name) return;
+    const from = video.currentTime;
+    const rec = { id: null, ranges: [[from, from]], maxS: 0, started: null };
+    rec.started = this._api("api/clip", {
+      name: this._name,
+      client: this._client,
+      from: round3(from),
+    })
+      .then((r) => {
+        rec.id = r.id;
+        rec.maxS = Number(r.max_s) || 0;
+      })
+      .catch((err) => {
+        if (this._rec === rec) this._rec = null;
+        this._showToast(`Recording didn't start: ${messageOf(err)}`, "err");
+      });
+    this._rec = rec;
+  }
+
+  _onSeeking() {
+    const rec = this._rec;
+    const video = this._video();
+    if (!rec || !video) return;
+    const t = video.currentTime;
+    const last = rec.ranges[rec.ranges.length - 1];
+    if (last[1] - last[0] < 0.05) rec.ranges[rec.ranges.length - 1] = [t, t];
+    else rec.ranges.push([t, t]); // a seek or a skip: a new stretch
+    this.requestUpdate();
+  }
+
+  _trackRecording(t) {
+    const rec = this._rec;
+    const last = rec.ranges[rec.ranges.length - 1];
+    // Playing on extends the stretch, however late the update (seeks start a new one in _onSeeking); going back
+    // without a seek event (the player moving itself) starts a new one too.
+    if (t >= last[1]) last[1] = t;
+    else if (t < last[1] - 0.5) rec.ranges.push([t, t]);
+    this.requestUpdate();
+    if (rec.maxS && recordedSeconds(rec) >= rec.maxS)
+      this._finishRecording(`Clip saved: ${fmtTime(rec.maxS)} is the longest.`);
+  }
+
+  _finishRecording(note = "") {
+    const rec = this._rec;
+    if (!rec) return;
+    this._rec = null;
+    this._saveClip(rec, note);
+  }
+
+  async _saveClip(rec, note) {
+    const ranges = rec.ranges
+      .filter(([a, b]) => b - a >= 0.2)
+      .map(([a, b]) => [round3(a), round3(b)]);
+    await rec.started;
+    if (!rec.id) return;
+    if (!ranges.length) {
+      this._api(`api/clip/${rec.id}/cancel`, {}).catch(() => {});
+      this._showToast("Nothing was recorded: it wasn't playing.", "err");
+      return;
+    }
+    this._showToast("Saving the clip…", "busy", 0);
+    try {
+      const out = await this._api(`api/clip/${rec.id}/stop`, { ranges, title: this.label || "" });
+      this._download(out.url, out.file);
+      this._showToast(note || `Saved · ${out.file}`, "ok");
+    } catch (err) {
+      this._showToast(`The clip wasn't saved: ${messageOf(err)}`, "err");
+    }
+  }
+
+  /** A download of the add-on's file. The click doesn't bubble (as Home Assistant's own downloads), so the app's
+   * link handling never takes it for a page. */
+  _download(url, file) {
+    const a = document.createElement("a");
+    a.href = this._base + url;
+    a.download = file || "";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.dispatchEvent(new MouseEvent("click"));
+    a.remove();
+  }
+
+  _showToast(text, kind = "ok", ms = TOAST_MS) {
+    clearTimeout(this._toastTimer);
+    this._toast = { text, kind };
+    if (ms) this._toastTimer = setTimeout(() => (this._toast = null), ms);
+  }
+
+  /** A horizontal swipe on the picture: the host may move to the next (1) or previous (-1) camera. */
+  _swipe(dir) {
+    const video = this._video();
+    const at =
+      this._status && video ? clockAt(this._status, video.currentTime) : (this._clock ?? this.time);
+    const ev = new CustomEvent("nvr-swipe", {
+      detail: { dir, time: Math.round(at), stream: this._active, fullscreen: this._fullscreen },
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    });
+    if (!this.dispatchEvent(ev)) this._finishRecording();
   }
 
   // ── full screen (landscape) ─────────────────────────────────────────
@@ -916,28 +1152,33 @@ export class CgcNvrPlayer extends LitElement {
       }
       return;
     }
-    const el = this.renderRoot?.querySelector(".nvr");
-    const video = this._video();
-    const request = el?.requestFullscreen || el?.webkitRequestFullscreen;
-    if (request) {
-      try {
-        this._fsAsked = true;
-        await request.call(el, { navigationUI: "hide" });
-        // Chrome turns the screen; a WebView (the Home Assistant app) can't, and the picture is turned instead.
-        await screen.orientation
-          ?.lock?.("landscape")
-          .then(() => {
-            this._locked = true;
-          })
-          .catch(() => {});
-        return;
-      } catch {
-        this._fsAsked = false; // not allowed for an element here: the video's own full screen
-      }
-    }
+    if (await this._enterFullscreen()) return;
     // iPhone: only the video's own full screen, whose player turns with the phone.
+    const video = this._video();
     if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
     else video?.requestFullscreen?.().catch(() => {});
+  }
+
+  /** The player's own full screen (turned to landscape); false when the browser doesn't allow it here. */
+  async _enterFullscreen() {
+    const el = this.renderRoot?.querySelector(".nvr");
+    const request = el?.requestFullscreen || el?.webkitRequestFullscreen;
+    if (!request) return false;
+    try {
+      this._fsAsked = true;
+      await request.call(el, { navigationUI: "hide" });
+      // Chrome turns the screen; a WebView (the Home Assistant app) can't, and the picture is turned instead.
+      await screen.orientation
+        ?.lock?.("landscape")
+        .then(() => {
+          this._locked = true;
+        })
+        .catch(() => {});
+      return true;
+    } catch {
+      this._fsAsked = false; // not allowed for an element here (or no recent touch)
+      return false;
+    }
   }
 
   _fsChanged() {
@@ -1013,6 +1254,7 @@ export class CgcNvrPlayer extends LitElement {
             playsinline
             muted
             @timeupdate=${(e) => this._onTimeUpdate(e)}
+            @seeking=${() => this._onSeeking()}
             @durationchange=${(e) => this._onDuration(e)}
             @loadedmetadata=${(e) => this._onDuration(e)}
             @progress=${(e) => (this._buf = bufferedEnd(e.target))}
@@ -1039,6 +1281,17 @@ export class CgcNvrPlayer extends LitElement {
               </div>`
             : ""}
           ${waiting ? this._renderWait() : ""}
+          ${this._flash ? html`<div class="nvr-flash"></div>` : ""}
+          ${this._rec
+            ? html`<div class="nvr-recchip" role="status" aria-label="Recording">
+                <span class="nvr-recdot"></span>REC ${fmtTime(recordedSeconds(this._rec))}
+              </div>`
+            : ""}
+          ${this._toast
+            ? html`<div class="nvr-toast ${this._toast.kind}" role="status" aria-live="polite">
+                ${this._toast.text}
+              </div>`
+            : ""}
           <div class="nvr-ui ${shown ? "shown" : ""}">
             ${this.bare
               ? "" /* the host has its own Low / High and close; the camera shows the time itself */
@@ -1096,6 +1349,27 @@ export class CgcNvrPlayer extends LitElement {
               </div>`
             : ""}
         </div>
+        <button
+          class="nvr-icon nvr-shot"
+          title="Save a snapshot"
+          aria-label="Save a snapshot"
+          @click=${() => this._snapshot()}
+        >
+          <ha-icon icon="mdi:camera-outline"></ha-icon>
+        </button>
+        ${this._status?.engine === "replay"
+          ? html`<button
+              class="nvr-icon nvr-rec ${this._rec ? "on" : ""}"
+              title=${this._rec ? "Stop and save the clip" : "Record a clip"}
+              aria-label=${this._rec ? "Stop and save the clip" : "Record a clip"}
+              aria-pressed=${this._rec ? "true" : "false"}
+              @click=${() => this._toggleRecord()}
+            >
+              <ha-icon
+                icon=${this._rec ? "mdi:stop-circle" : "mdi:record-circle-outline"}
+              ></ha-icon>
+            </button>`
+          : ""}
         <button
           class="nvr-icon nvr-mute"
           title=${this._muted ? "Unmute" : "Mute"}

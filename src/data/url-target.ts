@@ -6,12 +6,23 @@
  * - `cgc_src` must be one of the card's own items (the card looks it up), so a crafted link can't load anything new.
  * - `cgc_time` (epoch milliseconds or seconds, or ISO 8601) is the fallback: the item at or just before that moment
  *   (or the first one after it), e.g. when the file has since been deleted.
+ * Swiping to the next camera (owner 10-20) adds:
+ * - `cgc_near=1`: the item closest to the moment, before or after it;
+ * - `cgc_nvr=sub|main`: the viewer was streaming: play the NVR's recording from the moment in that quality (on a
+ *   camera without an NVR channel, the closest snapshot);
+ * - `cgc_fs=1`: it was full screen.
  * The parameters apply once: the card removes them from the address after using them.
  */
 
 export interface UrlTarget {
   src: string | null;
   time: number | null;
+  /** The item closest to `time` (else at or before it). */
+  near?: boolean;
+  /** Stream from `time` in this quality ("sub" / "main"). */
+  nvr?: string | null;
+  /** Full screen. */
+  fs?: boolean;
   /** Day switches already made while resolving (internal). */
   hops?: number;
 }
@@ -29,6 +40,9 @@ export const DEEP_LINK_PARAMS = [
   "cgc_camera",
   "cgc_src",
   "cgc_time",
+  "cgc_near",
+  "cgc_nvr",
+  "cgc_fs",
 ] as const;
 
 const MIN_MS = Date.UTC(2000, 0, 1);
@@ -63,7 +77,13 @@ export function parseUrlTarget(opts: {
       ? rawSrc
       : null;
   const time = parseUrlTime(params.get("cgc_time"));
-  return src || time !== null ? { src, time } : null;
+  if (!src && time === null) return null;
+  const target: UrlTarget = { src, time };
+  if (params.get("cgc_near") === "1") target.near = true;
+  const nvr = params.get("cgc_nvr");
+  if (time !== null && (nvr === "sub" || nvr === "main")) target.nvr = nvr;
+  if (params.get("cgc_fs") === "1") target.fs = true;
+  return target;
 }
 
 /** The entry a target names: the exact file, else the latest one at or before the moment, else the first after. */
@@ -78,6 +98,7 @@ export function pickTargetEntry<T extends TargetEntry>(
   }
   const t = target.time;
   if (t === null || !Number.isFinite(t)) return null;
+  if (target.near) return closestEntry(entries, t);
   let before: T | null = null;
   let after: T | null = null;
   for (const e of entries) {
@@ -90,6 +111,22 @@ export function pickTargetEntry<T extends TargetEntry>(
     }
   }
   return before ?? after;
+}
+
+/** The item closest in time to `t` (the earlier of two equally close), or null. */
+export function closestEntry<T extends TargetEntry>(entries: readonly T[], t: number): T | null {
+  let best: T | null = null;
+  let gap = Infinity;
+  for (const e of entries) {
+    const ms = e.dtMs;
+    if (typeof ms !== "number" || !Number.isFinite(ms)) continue;
+    const g = Math.abs(ms - t);
+    if (g < gap || (g === gap && best && ms < (best.dtMs as number))) {
+      gap = g;
+      best = e;
+    }
+  }
+  return best;
 }
 
 /** The index in `list` of `entry`, else of the item closest in time to it; -1 when the list is empty. */
