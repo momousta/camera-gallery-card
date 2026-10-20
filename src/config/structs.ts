@@ -533,6 +533,8 @@ export const cameraGalleryCardConfigStruct = type({
   // item's moment, through the NVR Playback add-on (`nvr_addon`, its slug).
   nvr_channel: optional(intInRange(0, 63)),
   nvr_addon: defaulted(string(), DEFAULT_NVR_ADDON),
+  // BL-008: letting the scrolled strip come to rest plays the NVR's Low stream of that moment, quietly.
+  nvr_autoplay: defaulted(boolean(), true),
   pill_size: defaulted(intInRange(PILL_SIZE_MIN, PILL_SIZE_MAX), PILL_SIZE_DEFAULT),
   row_gap: defaulted(intInRange(ROW_GAP_MIN, ROW_GAP_MAX), ROW_GAP_DEFAULT),
   card_height: defaulted(intInRange(CARD_HEIGHT_MIN, CARD_HEIGHT_MAX), CARD_HEIGHT_DEFAULT),

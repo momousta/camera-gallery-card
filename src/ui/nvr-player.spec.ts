@@ -119,10 +119,11 @@ function makeHass(over: Record<string, (msg: any) => unknown> = {}) {
 }
 
 let resetNvrShared: () => void;
+let warmNvr: (hass: any, addon: string, channel: number) => Promise<void>;
 let cookies: string[] = [];
 
 beforeAll(async () => {
-  ({ resetNvrShared } = (await import("../nvr/nvr-player.js")) as any);
+  ({ resetNvrShared, warmNvr } = (await import("../nvr/nvr-player.js")) as any);
 });
 
 beforeEach(() => {
@@ -324,10 +325,11 @@ describe("<cgc-nvr-player>", () => {
     expect(plays(calls)[2]).toMatchObject({ stream: "main", time: FILE_START + 1_800_000 + 1000 });
   });
 
-  it("bare: only the clock, the host has its own buttons", async () => {
+  it("bare: the clock and full screen, the host has its own Low / High and close", async () => {
     installFetch(happyRoute());
     const el = await mount({ bare: true });
     expect(el.shadowRoot.querySelector(".nvr-clock")).not.toBeNull();
+    expect(el.shadowRoot.querySelector(".nvr-fs")).not.toBeNull();
     expect(el.shadowRoot.querySelector(".nvr-res")).toBeNull();
     expect(el.shadowRoot.querySelector(".nvr-close")).toBeNull();
   });
@@ -349,5 +351,207 @@ describe("<cgc-nvr-player>", () => {
     await el.updateComplete;
     expect(text(el)).toContain("The recording couldn't be played.");
     expect(hls.destroyed).toBe(true);
+  });
+
+  it("quiet: loads unseen, without progress, and shows itself once the video plays", async () => {
+    installFetch(happyRoute({ engine: "replay", state: "streaming" }));
+    const el = await mount({ quiet: true });
+    const events: string[] = [];
+    el.addEventListener("nvr-reveal", () => events.push("reveal"));
+    expect(el.hasAttribute("quiet")).toBe(true);
+    expect(el.hasAttribute("revealed")).toBe(false);
+    expect(el.shadowRoot.querySelector(".nvr-wait")).toBeNull();
+    await flush(200);
+    await el.updateComplete;
+    expect(FakeHls.instances).toHaveLength(1);
+    expect(el.shadowRoot.querySelector(".nvr-wait")).toBeNull();
+    video(el).dispatchEvent(new Event("canplay")); // a first frame isn't playing yet
+    await el.updateComplete;
+    expect(el.hasAttribute("revealed")).toBe(false);
+    video(el).dispatchEvent(new Event("playing"));
+    await el.updateComplete;
+    expect(el.hasAttribute("revealed")).toBe(true);
+    expect(events).toEqual(["reveal"]);
+  });
+
+  it("quiet: a start that fails closes itself without a word", async () => {
+    const calls = installFetch((url) =>
+      url === `${BASE}api/play`
+        ? { status: 404, body: { error: "no_recording", message: "x" } }
+        : undefined
+    );
+    const closes: any[] = [];
+    document.addEventListener("nvr-close", (e: any) => closes.push(e.detail), { once: true });
+    const el = await mount({ quiet: true });
+    expect(closes).toEqual([{ quiet: true, error: "The NVR has no recording at this moment." }]);
+    expect(el.hasAttribute("revealed")).toBe(false);
+    expect(el.shadowRoot.querySelector(".nvr-box")).toBeNull();
+    expect(plays(calls)).toHaveLength(1);
+  });
+
+  it("quiet turned off while it loads (the viewer tapped Low) shows the progress", async () => {
+    installFetch(happyRoute({ engine: "replay", state: "streaming" }));
+    const el = await mount({ quiet: true });
+    el.quiet = false;
+    await el.updateComplete;
+    expect(el.hasAttribute("quiet")).toBe(false);
+    expect(text(el)).toContain("Opening the low-resolution recording");
+  });
+
+  it("the replay engine asks again for a slow part; the download fallback waits for it", async () => {
+    installFetch(happyRoute({ engine: "replay", state: "streaming" }));
+    await mount();
+    await flush(200);
+    expect(FakeHls.instances[0]!.config.fragLoadPolicy.default.maxTimeToFirstByteMs).toBe(15_000);
+    document.body.replaceChildren();
+    FakeHls.instances = [];
+    installFetch(happyRoute());
+    await mount();
+    await flush(450);
+    expect(FakeHls.instances[0]!.config.fragLoadPolicy.default.maxTimeToFirstByteMs).toBe(240_000);
+  });
+
+  describe("full screen", () => {
+    // As in Home Assistant: the document sees only the outermost host; the player's own root sees its element.
+    let fsElement: Element | null = null;
+    let fsInner: Element | null = null;
+    const enter = (el: Element) => {
+      fsInner = el;
+      fsElement = document.body;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    };
+    const request = vi.fn(async function (this: Element) {
+      enter(this);
+    });
+    const exit = vi.fn(async () => {
+      fsElement = fsInner = null;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    });
+    const lock = vi.fn(() => Promise.reject(new Error("NotSupportedError")));
+    const unlock = vi.fn();
+
+    beforeEach(() => {
+      fsElement = fsInner = null;
+      request.mockClear();
+      exit.mockClear();
+      Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+        configurable: true,
+        value: request,
+      });
+      Object.defineProperty(document, "fullscreenElement", {
+        configurable: true,
+        get: () => fsElement,
+      });
+      Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exit });
+      Object.defineProperty(ShadowRoot.prototype, "fullscreenElement", {
+        configurable: true,
+        get(this: ShadowRoot) {
+          return fsInner && this.contains(fsInner) ? fsInner : null;
+        },
+      });
+      vi.stubGlobal("screen", { orientation: { lock, unlock } });
+      vi.stubGlobal("DeviceMotionEvent", class {});
+    });
+
+    afterEach(() => {
+      delete (HTMLElement.prototype as any).requestFullscreen;
+      delete (document as any).fullscreenElement;
+      delete (document as any).exitFullscreen;
+      delete (ShadowRoot.prototype as any).fullscreenElement;
+    });
+
+    const motion = (x: number) => {
+      const e: any = new Event("devicemotion");
+      e.accelerationIncludingGravity = { x, y: 0, z: 0 };
+      window.dispatchEvent(e);
+    };
+
+    it("is the player's own (the native button is hidden), landscape, and turns with the phone", async () => {
+      installFetch(happyRoute());
+      const el = await mount();
+      expect(video(el).getAttribute("controlslist")).toBe("nofullscreen");
+      el.shadowRoot.querySelector(".nvr-fs").click();
+      await flush();
+      await el.updateComplete;
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request.mock.contexts[0]).toBe(el.shadowRoot.querySelector(".nvr"));
+      expect(lock).toHaveBeenCalledWith("landscape"); // refused (a WebView): the picture is turned instead
+      expect(el.shadowRoot.querySelector(".nvr").classList.contains("fs")).toBe(true);
+      expect(el.shadowRoot.querySelector(".nvr-fs").getAttribute("title")).toBe("Exit full screen");
+      const stage = () => el.shadowRoot.querySelector(".nvr-stage").getAttribute("style");
+      expect(stage()).toBe("--nvr-rot:90deg");
+      motion(-9.5); // held with its top to the right
+      await el.updateComplete;
+      expect(stage()).toBe("--nvr-rot:-90deg");
+      motion(2); // in between: no change
+      await el.updateComplete;
+      expect(stage()).toBe("--nvr-rot:-90deg");
+
+      el.shadowRoot.querySelector(".nvr-fs").click();
+      await flush();
+      await el.updateComplete;
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(el.shadowRoot.querySelector(".nvr").classList.contains("fs")).toBe(false);
+      motion(9.5); // no longer listened to
+      await el.updateComplete;
+      expect(stage()).toBe("--nvr-rot:-90deg");
+    });
+
+    it("someone else's full screen isn't the player's", async () => {
+      installFetch(happyRoute());
+      const el = await mount();
+      fsInner = document.createElement("div");
+      fsElement = fsInner;
+      document.dispatchEvent(new Event("fullscreenchange"));
+      await el.updateComplete;
+      expect(el.shadowRoot.querySelector(".nvr").classList.contains("fs")).toBe(false);
+    });
+
+    it("an iPhone uses the video's own full screen, whose player turns with the phone", async () => {
+      delete (HTMLElement.prototype as any).requestFullscreen;
+      const native = vi.fn();
+      (HTMLVideoElement.prototype as any).webkitEnterFullscreen = native;
+      try {
+        installFetch(happyRoute());
+        const el = await mount();
+        el.shadowRoot.querySelector(".nvr-fs").click();
+        await flush();
+        expect(native).toHaveBeenCalledTimes(1);
+        expect(native.mock.contexts[0]).toBe(video(el));
+      } finally {
+        delete (HTMLVideoElement.prototype as any).webkitEnterFullscreen;
+      }
+    });
+  });
+
+  it("warmNvr has the add-on list the camera's day, at most every 10 minutes", async () => {
+    const calls = installFetch((url) =>
+      url === `${BASE}api/warm` ? { status: 202, body: { ok: true } } : undefined
+    );
+    const hass = makeHass();
+    await warmNvr(hass, "local_nvr_playback", 7);
+    await warmNvr(hass, "local_nvr_playback", 7);
+    const warms = () => calls.filter((c) => c.url === `${BASE}api/warm`);
+    expect(warms()).toHaveLength(1);
+    expect(JSON.parse(warms()[0]!.init.body)).toEqual({ channel: 7 });
+    expect(warms()[0]!.init.method).toBe("POST");
+    await warmNvr(hass, "local_nvr_playback", 6); // another camera
+    expect(warms()).toHaveLength(2);
+    vi.setSystemTime(NOW.getTime() + 10 * 60_000 + 1);
+    await warmNvr(hass, "local_nvr_playback", 7);
+    expect(warms()).toHaveLength(3);
+    await warmNvr(null, "local_nvr_playback", 5); // no hass yet: nothing
+    expect(warms()).toHaveLength(3);
+  });
+
+  it("a warm-up that failed is tried again a minute later, not ten", async () => {
+    const calls = installFetch(() => undefined);
+    const broken = makeHass({
+      "/addons/local_nvr_playback/info": () => Promise.reject({ code: "x" }),
+    });
+    await warmNvr(broken, "local_nvr_playback", 7);
+    vi.setSystemTime(NOW.getTime() + 61_000);
+    await warmNvr(makeHass(), "local_nvr_playback", 7);
+    expect(calls.filter((c) => c.url === `${BASE}api/warm`)).toHaveLength(1);
   });
 });

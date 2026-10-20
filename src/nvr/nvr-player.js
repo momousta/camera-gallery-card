@@ -5,15 +5,18 @@
  * Properties (set by the card):
  *   hass, channel (NVR channel), time (epoch ms to start at), stream ("sub" = Low, "main" = High),
  *   addon (add-on slug, default local_nvr_playback), poster (picture shown while the recording is fetched),
- *   bare (true where the host shows its own Low / High and close buttons: then the bar is just the clock)
+ *   bare (true where the host shows its own Low / High and close buttons: then the bar is the clock and full
+ *   screen), quiet (load unseen: no progress, no error; the player shows itself once the video plays)
  * Events (bubbling, composed):
- *   nvr-close: the viewer asked to go back to the snapshots
+ *   nvr-close: the viewer asked to go back to the snapshots; { quiet: true } when a quiet start failed
  *   nvr-stream: { stream } the viewer switched between Low and High
+ *   nvr-reveal: a quiet player started playing and showed itself
  *
- * The NVR can only send a recording from its start (30-minute files), so the add-on downloads up to the
- * moment first; this element shows that progress over the poster, then plays the add-on's HLS stream from the
- * moment with native HLS (Safari, iOS) or hls.js (loaded from the add-on), and goes on to the next recording at
- * the end.
+ * The add-on asks the NVR for the moment (or, as a fallback, downloads the recording up to it, with progress
+ * over the poster). This element plays the add-on's HLS stream from the moment with native HLS (Safari, iOS)
+ * or hls.js (loaded from the add-on), and goes on to the next recording at the end. Full screen is landscape:
+ * the screen is turned where the browser can (Chrome), else the picture is turned while the screen is portrait
+ * (an app's WebView can't turn the screen); iPhones use their own player, which turns with the phone.
  */
 
 import { LitElement, html } from "lit";
@@ -43,16 +46,46 @@ const POLL_MS = 400;
 const POLL_REPLAY_MS = 150; // the NVR's replay is ready in about a second
 const KEEPALIVE_MS = 15_000;
 const LIVE_EDGE_MS = 20_000;
+const WARM_EVERY_MS = 10 * 60_000; // the add-on keeps a listed day for 30 minutes
 
 let session = new IngressSession();
 let locator = new AddonLocator();
 let hlsLoading = null;
+let warmed = new Map();
 
-/** Tests: forget the page-wide session, add-on URL and hls.js loader. */
+/** Tests: forget the page-wide session, add-on URL, hls.js loader and warm-ups. */
 export function resetNvrShared() {
   session = new IngressSession();
   locator = new AddonLocator();
   hlsLoading = null;
+  warmed = new Map();
+}
+
+/**
+ * Have the add-on list a camera's recordings of today ahead of a play, so the first play needs no NVR search
+ * (about a second). At most every 10 minutes per camera; problems are left for a play to report.
+ */
+export async function warmNvr(hass, addon, channel) {
+  if (!hass || !Number.isInteger(channel)) return;
+  const slug = addon || DEFAULT_NVR_ADDON;
+  const key = `${slug}:${channel}`;
+  const now = Date.now();
+  if (warmed.has(key) && now - warmed.get(key) < WARM_EVERY_MS) return;
+  warmed.set(key, now);
+  try {
+    const base = await locator.base(hass, slug);
+    await session.ensure(hass);
+    await fetch(`${base}api/warm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel }),
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+  } catch {
+    // The play itself reports what is wrong; try again in a minute.
+    warmed.set(key, now - WARM_EVERY_MS + 60_000);
+  }
 }
 
 /** hls.js from the add-on, once per page (the UMD build sets window.Hls). */
@@ -101,12 +134,16 @@ export class CgcNvrPlayer extends LitElement {
       addon: { type: String },
       poster: { type: String },
       bare: { type: Boolean },
+      quiet: { type: Boolean, reflect: true },
       _phase: { state: true },
       _status: { state: true },
       _error: { state: true },
       _errorCode: { state: true },
       _clock: { state: true },
       _active: { state: true },
+      _revealed: { state: true },
+      _fullscreen: { state: true },
+      _rot: { state: true },
     };
   }
 
@@ -123,6 +160,15 @@ export class CgcNvrPlayer extends LitElement {
     this.addon = DEFAULT_NVR_ADDON;
     this.poster = "";
     this.bare = false;
+    this.quiet = false;
+    this._revealed = false;
+    this._fullscreen = false;
+    this._rot = 90;
+    this._locked = false;
+    this._fsAsked = false;
+    this._motionOn = false;
+    this._onFsChange = () => this._fsChanged();
+    this._onMotion = (e) => this._motion(e);
     this._phase = "idle"; // idle | starting | fetching | buffering | playing | error
     this._status = null;
     this._error = "";
@@ -138,10 +184,24 @@ export class CgcNvrPlayer extends LitElement {
     this._recovered = false;
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener("fullscreenchange", this._onFsChange);
+    document.addEventListener("webkitfullscreenchange", this._onFsChange);
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
+    document.removeEventListener("fullscreenchange", this._onFsChange);
+    document.removeEventListener("webkitfullscreenchange", this._onFsChange);
     this._run++;
     this._teardown();
+    this._leftFullscreen();
+  }
+
+  updated() {
+    // Hidden (see the styles) while a quiet start loads.
+    this.toggleAttribute("revealed", this._revealed);
   }
 
   willUpdate(changed) {
@@ -173,14 +233,30 @@ export class CgcNvrPlayer extends LitElement {
     this._target = atMs;
     this._go(run, atMs).catch((err) => {
       if (run !== this._run) return;
-      this._teardown();
-      this._phase = "error";
-      this._errorCode = err instanceof NvrError ? err.code : "";
-      this._error =
-        this._errorCode === "no_recording" && atMs > Date.now() - 5 * 60_000
+      const code = err instanceof NvrError ? err.code : "";
+      this._fail(
+        code,
+        code === "no_recording" && atMs > Date.now() - 5 * 60_000
           ? "The NVR hasn't recorded past this moment yet."
-          : messageOf(err);
+          : messageOf(err)
+      );
     });
+  }
+
+  /** Stop and show why; a quiet start that never showed itself asks the host to drop it instead. */
+  _fail(code, message) {
+    this._teardown();
+    this._phase = "error";
+    this._errorCode = code;
+    this._error = message;
+    if (this.quiet && !this._revealed)
+      this.dispatchEvent(
+        new CustomEvent("nvr-close", {
+          detail: { quiet: true, error: message },
+          bubbles: true,
+          composed: true,
+        })
+      );
   }
 
   async _go(run, atMs) {
@@ -311,14 +387,23 @@ export class CgcNvrPlayer extends LitElement {
         maxMaxBufferLength: 60,
         backBufferLength: 60,
         enableWorker: true,
-        // A part not downloaded yet is answered when it arrives (the add-on waits for the NVR).
         fragLoadPolicy: {
-          default: {
-            maxTimeToFirstByteMs: 240_000,
-            maxLoadTimeMs: 300_000,
-            timeoutRetry: { maxNumRetry: 2, retryDelayMs: 1000, maxRetryDelayMs: 4000 },
-            errorRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
-          },
+          default:
+            st.engine === "replay"
+              ? // The NVR sends any part in a second or two: a part that takes long is asked again.
+                {
+                  maxTimeToFirstByteMs: 15_000,
+                  maxLoadTimeMs: 40_000,
+                  timeoutRetry: { maxNumRetry: 3, retryDelayMs: 0, maxRetryDelayMs: 0 },
+                  errorRetry: { maxNumRetry: 6, retryDelayMs: 500, maxRetryDelayMs: 4000 },
+                }
+              : // Download fallback: a part not downloaded yet is answered when it arrives.
+                {
+                  maxTimeToFirstByteMs: 240_000,
+                  maxLoadTimeMs: 300_000,
+                  timeoutRetry: { maxNumRetry: 2, retryDelayMs: 1000, maxRetryDelayMs: 4000 },
+                  errorRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+                },
         },
       });
       this._hls = hls;
@@ -336,6 +421,7 @@ export class CgcNvrPlayer extends LitElement {
   _play(video) {
     video.play().catch(() => {
       if (this._phase === "buffering") this._phase = "playing";
+      this._reveal();
     });
   }
 
@@ -346,13 +432,12 @@ export class CgcNvrPlayer extends LitElement {
       hls.recoverMediaError();
       return;
     }
-    this._teardown();
-    this._phase = "error";
-    this._errorCode = "playback";
-    this._error =
+    this._fail(
+      "playback",
       data.type === Hls.ErrorTypes.NETWORK_ERROR
         ? "Lost the connection to the NVR Playback add-on."
-        : "The recording couldn't be played.";
+        : "The recording couldn't be played."
+    );
   }
 
   _startKeepAlive(run) {
@@ -407,11 +492,23 @@ export class CgcNvrPlayer extends LitElement {
   _onTimeUpdate(e) {
     if (!this._status) return;
     this._clock = clockAt(this._status, e.target.currentTime);
-    if (this._phase === "buffering" && !e.target.paused) this._phase = "playing";
+    if (!e.target.paused) {
+      if (this._phase === "buffering") this._phase = "playing";
+      this._reveal();
+    }
   }
 
-  _onPlaying() {
+  /** started: the video plays (a quiet player shows itself); else it can play (the first frame is up). */
+  _onPlaying(started) {
     if (this._phase === "buffering") this._phase = "playing";
+    if (started) this._reveal();
+  }
+
+  _reveal() {
+    if (this._revealed) return;
+    this._revealed = true;
+    if (this.quiet)
+      this.dispatchEvent(new CustomEvent("nvr-reveal", { bubbles: true, composed: true }));
   }
 
   _onEnded() {
@@ -423,10 +520,7 @@ export class CgcNvrPlayer extends LitElement {
     if (this._hls || this._phase === "idle" || this._phase === "error") return;
     const video = this._video();
     if (!video?.getAttribute("src")) return;
-    this._teardown();
-    this._phase = "error";
-    this._errorCode = "playback";
-    this._error = "The recording couldn't be played on this device.";
+    this._fail("playback", "The recording couldn't be played on this device.");
   }
 
   // ── actions ─────────────────────────────────────────────────────────
@@ -448,14 +542,98 @@ export class CgcNvrPlayer extends LitElement {
     this.dispatchEvent(new CustomEvent("nvr-close", { bubbles: true, composed: true }));
   }
 
+  // ── full screen (landscape) ─────────────────────────────────────────
+
+  async _toggleFullscreen() {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      try {
+        await exit?.call(document);
+      } catch {
+        /* already left */
+      }
+      return;
+    }
+    const el = this.renderRoot?.querySelector(".nvr");
+    const video = this._video();
+    const request = el?.requestFullscreen || el?.webkitRequestFullscreen;
+    if (request) {
+      try {
+        this._fsAsked = true;
+        await request.call(el, { navigationUI: "hide" });
+        // Chrome turns the screen; a WebView (the Home Assistant app) can't, and the picture is turned instead.
+        await screen.orientation
+          ?.lock?.("landscape")
+          .then(() => {
+            this._locked = true;
+          })
+          .catch(() => {});
+        return;
+      } catch {
+        this._fsAsked = false; // not allowed for an element here: the video's own full screen
+      }
+    }
+    // iPhone: only the video's own full screen, whose player turns with the phone.
+    if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
+    else video?.requestFullscreen?.().catch(() => {});
+  }
+
+  _fsChanged() {
+    // The document only sees the outermost shadow host (in Home Assistant, <home-assistant>): ask our own root,
+    // or (engines without ShadowRoot.fullscreenElement) whether we asked for it.
+    const any = document.fullscreenElement || document.webkitFullscreenElement;
+    const root = this.renderRoot;
+    const ours =
+      root && "fullscreenElement" in root
+        ? root.fullscreenElement === root.querySelector(".nvr")
+        : this._fsAsked;
+    const now = !!any && ours;
+    if (!any) this._fsAsked = false;
+    if (now === this._fullscreen) return;
+    this._fullscreen = now;
+    if (now) this._startMotion();
+    else this._leftFullscreen();
+  }
+
+  _leftFullscreen() {
+    this._fullscreen = false;
+    if (this._motionOn) {
+      this._motionOn = false;
+      window.removeEventListener("devicemotion", this._onMotion);
+    }
+    if (this._locked) {
+      this._locked = false;
+      try {
+        screen.orientation?.unlock?.();
+      } catch {
+        /* nothing locked */
+      }
+    }
+  }
+
+  /** Which way the phone is turned (where the browser tells: https), so the turned picture is upright. */
+  _startMotion() {
+    if (this._motionOn || typeof window.DeviceMotionEvent === "undefined") return;
+    this._motionOn = true;
+    window.addEventListener("devicemotion", this._onMotion);
+  }
+
+  _motion(e) {
+    const x = e?.accelerationIncludingGravity?.x;
+    if (typeof x !== "number") return;
+    // Gravity along the phone's x axis: its top is to the left (x > 0) or to the right (x < 0).
+    if (x > 6 && this._rot !== 90) this._rot = 90;
+    else if (x < -6 && this._rot !== -90) this._rot = -90;
+  }
+
   // ── render ──────────────────────────────────────────────────────────
 
   render() {
     const locale = this.hass?.locale;
-    const waiting = this._phase !== "playing";
+    const waiting = this._phase !== "playing" && (!this.quiet || this._revealed);
     return html`
       <div
-        class="nvr"
+        class="nvr ${this._fullscreen ? "fs" : ""}"
         @pointerdown=${stopEvent}
         @pointerup=${stopEvent}
         @pointercancel=${stopEvent}
@@ -465,25 +643,42 @@ export class CgcNvrPlayer extends LitElement {
         @touchend=${stopEvent}
         @wheel=${{ handleEvent: stopEvent, passive: true }}
       >
-        <video
-          class="nvr-video"
-          playsinline
-          muted
-          controls
-          @timeupdate=${(e) => this._onTimeUpdate(e)}
-          @playing=${() => this._onPlaying()}
-          @canplay=${() => this._onPlaying()}
-          @ended=${() => this._onEnded()}
-          @error=${() => this._onVideoError()}
-        ></video>
-        ${waiting ? this._renderWait() : ""}
-        <div class="nvr-bar">
-          <span class="nvr-tag"><ha-icon icon="mdi:filmstrip-box"></ha-icon>NVR</span>
-          <span class="nvr-clock">${formatClockFromMs(this._clock ?? NaN, locale)}</span>
-          ${this.bare ? "" : this._renderControls()}
+        <div class="nvr-stage" style="--nvr-rot:${this._rot}deg">
+          <video
+            class="nvr-video"
+            playsinline
+            muted
+            controls
+            controlslist="nofullscreen"
+            @timeupdate=${(e) => this._onTimeUpdate(e)}
+            @playing=${() => this._onPlaying(true)}
+            @canplay=${() => this._onPlaying(false)}
+            @ended=${() => this._onEnded()}
+            @error=${() => this._onVideoError()}
+          ></video>
+          ${waiting ? this._renderWait() : ""}
+          <div class="nvr-bar">
+            <span class="nvr-tag"><ha-icon icon="mdi:filmstrip-box"></ha-icon>NVR</span>
+            <span class="nvr-clock">${formatClockFromMs(this._clock ?? NaN, locale)}</span>
+            ${this.bare
+              ? html`<span class="nvr-gap"></span>${this._renderFullscreen()}`
+              : this._renderControls()}
+          </div>
         </div>
       </div>
     `;
+  }
+
+  _renderFullscreen() {
+    const label = this._fullscreen ? "Exit full screen" : "Full screen";
+    return html`<button
+      class="nvr-icon nvr-fs"
+      title=${label}
+      aria-label=${label}
+      @click=${() => this._toggleFullscreen()}
+    >
+      <ha-icon icon=${this._fullscreen ? "mdi:fullscreen-exit" : "mdi:fullscreen"}></ha-icon>
+    </button>`;
   }
 
   _renderControls() {
@@ -501,8 +696,9 @@ export class CgcNvrPlayer extends LitElement {
             </button>`
         )}
       </span>
+      ${this._renderFullscreen()}
       <button
-        class="nvr-close"
+        class="nvr-icon nvr-close"
         title="Back to the snapshots"
         aria-label="Close"
         @click=${() => this._close()}

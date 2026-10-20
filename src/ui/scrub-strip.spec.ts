@@ -233,3 +233,147 @@ describe("scrub_on_drag on", () => {
     expect(card._scrubbing).toBe(false);
   });
 });
+
+describe("BL-008: the strip coming to rest plays the NVR's Low stream quietly", () => {
+  beforeEach(async () => {
+    // The player itself is tested on its own (nvr-player.spec); here only what the gallery asks of it.
+    const proto = customElements.get("cgc-nvr-player")!.prototype as any;
+    vi.spyOn(proto, "_begin").mockImplementation(() => {});
+    ((await import("../nvr/nvr-player.js")) as any).resetNvrShared();
+  });
+
+  it("asks the add-on to list the camera's day when it first shows, unless auto-play is off", async () => {
+    for (const [options, expected] of [
+      [{ nvr_channel: 7 }, [{ channel: 7 }]],
+      [{ nvr_channel: 6, nvr_autoplay: false }, []],
+      [{}, []],
+    ] as const) {
+      const fetches: any[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: any) => {
+          if (url.endsWith("api/warm")) fetches.push(JSON.parse(init.body));
+          return { status: 202, ok: true, json: async () => ({ ok: true }) };
+        })
+      );
+      const card = await renderGallery({ scrub_on_drag: true, ...options });
+      ((await import("../nvr/nvr-player.js")) as any).resetNvrShared(); // its first try had no add-on to ask
+      card._hass = {
+        states: {},
+        locale: { language: "en" },
+        callWS: async (msg: any) =>
+          msg.endpoint === "/addons/local_nvr_playback/info"
+            ? { ingress_url: "/api/hassio_ingress/tok/", state: "started" }
+            : { session: "s1" },
+      };
+      card._nvrWarmed = false;
+      card.requestUpdate();
+      await card.updateComplete;
+      for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(0);
+      expect(fetches).toEqual(expected);
+      card.remove();
+    }
+  });
+
+  const nvrPlayer = (card: any) => card.shadowRoot.querySelector(".preview cgc-nvr-player");
+
+  /** A mouse drag that leaves thumb `to` under the playhead, released, then the settle time. */
+  async function scrubTo(card: any, to: number, layout: { scroll: number }) {
+    const s = strip(card);
+    thumb(card, 0).dispatchEvent(pe("pointerdown", 250));
+    s.dispatchEvent(pe("pointermove", 240));
+    s.dispatchEvent(pe("pointermove", 20));
+    layout.scroll = to * 110; // thumb `to` centred
+    s.dispatchEvent(new Event("scroll"));
+    vi.advanceTimersByTime(20);
+    await card.updateComplete;
+    s.dispatchEvent(pe("pointerup", 20));
+    vi.advanceTimersByTime(200);
+    await card.updateComplete;
+    await Promise.resolve();
+    await card.updateComplete;
+  }
+
+  it("starts Low at the moment it rests on, unseen until it plays", async () => {
+    const card = await renderGallery({ scrub_on_drag: true, nvr_channel: 7 });
+    const layout = { scroll: 0 };
+    fakeLayout(card, () => layout.scroll);
+    await scrubTo(card, 2, layout);
+    expect(card._selectedIndex).toBe(2);
+    expect(card._nvr).toMatchObject({
+      src: ITEMS[2]!.src,
+      time: ITEMS[2]!.dtMs,
+      stream: "sub",
+      quiet: true,
+    });
+    const p = nvrPlayer(card);
+    expect(p).not.toBeNull();
+    expect([p.quiet, p.channel, p.time, p.stream]).toEqual([true, 7, ITEMS[2]!.dtMs, "sub"]);
+    expect(p.hasAttribute("quiet")).toBe(true);
+
+    // Shown once it plays: the clip under it is paused then, not before.
+    const pause = vi.spyOn(card, "_pausePreviewClip");
+    p.dispatchEvent(new CustomEvent("nvr-reveal", { bubbles: true, composed: true }));
+    expect(pause).toHaveBeenCalledTimes(1);
+
+    // Coming to rest on it again doesn't start it over.
+    const before = card._nvr;
+    card._onScrubSettle();
+    expect(card._nvr).toBe(before);
+  });
+
+  it("scrolling on closes it; resting again starts the new moment", async () => {
+    const card = await renderGallery({ scrub_on_drag: true, nvr_channel: 7 });
+    const layout = { scroll: 0 };
+    fakeLayout(card, () => layout.scroll);
+    await scrubTo(card, 2, layout);
+    expect(nvrPlayer(card)).not.toBeNull();
+    await scrubTo(card, 4, layout);
+    expect(card._nvr).toMatchObject({ src: ITEMS[4]!.src, quiet: true });
+    expect(nvrPlayer(card).time).toBe(ITEMS[4]!.dtMs);
+  });
+
+  it("a tap on a thumbnail doesn't start it", async () => {
+    const card = await renderGallery({ scrub_on_drag: true, nvr_channel: 7 });
+    thumb(card, 3).dispatchEvent(pe("pointerdown", 400));
+    thumb(card, 3).dispatchEvent(pe("pointerup", 400));
+    thumb(card, 3).click();
+    vi.advanceTimersByTime(500);
+    await card.updateComplete;
+    expect(card._selectedIndex).toBe(3);
+    expect(card._nvr).toBeNull();
+  });
+
+  it("not without an NVR channel, nor with nvr_autoplay: false", async () => {
+    for (const options of [{}, { nvr_channel: 7, nvr_autoplay: false }]) {
+      const card = await renderGallery({ scrub_on_drag: true, ...options });
+      const layout = { scroll: 0 };
+      fakeLayout(card, () => layout.scroll);
+      await scrubTo(card, 2, layout);
+      expect(card._selectedIndex).toBe(2);
+      expect(card._nvr).toBeNull();
+      card.remove();
+    }
+  });
+
+  it("a quiet start that fails is dropped; one the viewer takes over is no longer quiet", async () => {
+    const card = await renderGallery({ scrub_on_drag: true, nvr_channel: 7 });
+    const layout = { scroll: 0 };
+    fakeLayout(card, () => layout.scroll);
+    await scrubTo(card, 1, layout);
+    nvrPlayer(card).dispatchEvent(
+      new CustomEvent("nvr-close", { detail: { quiet: true }, bubbles: true, composed: true })
+    );
+    await card.updateComplete;
+    expect(card._nvr).toBeNull();
+    expect(nvrPlayer(card)).toBeNull();
+
+    await scrubTo(card, 3, layout);
+    nvrPlayer(card).dispatchEvent(
+      new CustomEvent("nvr-stream", { detail: { stream: "main" }, bubbles: true, composed: true })
+    );
+    await card.updateComplete;
+    expect(card._nvr).toMatchObject({ stream: "main", quiet: false });
+    expect(nvrPlayer(card).quiet).toBe(false);
+  });
+});

@@ -55,6 +55,7 @@ const UI_ONLY_KEYS = new Set<ConfigKey>([
   "preload_days",
   "nvr_channel",
   "nvr_addon",
+  "nvr_autoplay",
   "live_camera_entities",
   "live_cameras",
   "live_enabled",

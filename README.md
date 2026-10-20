@@ -177,9 +177,17 @@ A few notes on the generic walker:
 
 With `nvr_channel` set, the gallery pills get **Low** and **High**. They play the Reolink NVR's own recording from
 the selected item's moment:
-- playback starts in a second or two, anywhere in a recording (add-on 0.2+);
+- playback starts in a second or two, anywhere in a recording (add-on 0.2+), and its seek bar seeks anywhere in
+  that half hour;
 - the player's clock shows the moment being watched;
-- Low and High switch in place, and playback continues into the next recording.
+- Low and High switch in place, and playback continues into the next recording;
+- full screen (the button in the player's bar) is landscape: Chrome turns the screen. In an app's WebView (the
+  Home Assistant app), where a page can't turn the screen, the picture is turned while the screen is portrait;
+  hold the phone sideways. iPhones use their own player.
+
+With `scrub_on_drag`, scrolling the strip and letting it come to rest plays the Low stream of the moment it rests
+on, quietly: nothing shows while it loads, and the video replaces the snapshot once it plays (about a second). A
+tap on a thumbnail, the chevrons, a new day or a link don't start it. `nvr_autoplay: false` turns this off.
 
 Low is the sub stream (H.264, plays everywhere). High is the main stream (HEVC, only where the device decodes
 it). This needs the **NVR Playback** add-on. It asks the NVR for the moment through the NVR's own protocol, as the
@@ -367,6 +375,7 @@ data:
 | **NVR recordings (owner fork)** | |
 | `nvr_channel` | The camera's channel on a Reolink NVR. Adds **Low** / **High** pills that play the NVR's recording from the selected item's moment, through the NVR Playback add-on (default off) |
 | `nvr_addon` | That add-on's slug (default `local_nvr_playback`) |
+| `nvr_autoplay` | With `scrub_on_drag`, letting the scrolled strip come to rest plays the Low stream of that moment, quietly (default `true`) |
 | `bar_position` | Preview timestamp bar position |
 | `bar_opacity` | Preview timestamp bar opacity |
 | **Live view** | |

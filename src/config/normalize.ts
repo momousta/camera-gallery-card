@@ -211,6 +211,7 @@ export interface InputConfig {
   preload_days?: number;
   nvr_channel?: number;
   nvr_addon?: string;
+  nvr_autoplay?: boolean;
   pill_size?: number;
   row_gap?: number;
   card_height?: number;

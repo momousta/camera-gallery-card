@@ -47,7 +47,7 @@ import { renderCalendarPicker } from "./ui/calendar-picker";
 import { calendarPickerStyles } from "./ui/calendar-picker-styles";
 // BL-007: the multi-camera timeline card ships in the same bundle (<camera-timeline-card>).
 import "./timeline/timeline-card.js";
-import "./nvr/nvr-player.js";
+import { warmNvr } from "./nvr/nvr-player.js";
 import { DEFAULT_NVR_ADDON, nvrChannelOf } from "./nvr/nvr-api";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import { parseUrlActions } from "./data/url-actions";
@@ -3615,11 +3615,11 @@ class CameraGalleryCard extends LitElement {
     return nvrChannelOf(this.config?.nvr_channel);
   }
 
-  _startNvr(src, dtMs, stream) {
+  /** quiet: started by the strip coming to rest (the player loads unseen and shows itself once it plays). */
+  _startNvr(src, dtMs, stream, { quiet = false } = {}) {
     const channel = this._nvrChannel();
     if (channel === null || !src || !Number.isFinite(dtMs)) return;
-    // The clip under the player would keep playing (and talking) otherwise.
-    this.renderRoot?.querySelector("#preview-video-host video")?.pause?.();
+    if (!quiet) this._pausePreviewClip();
     const poster = this._sidecarFor(src) || (this._isVideoSmart(src) ? "" : src);
     this._nvr = {
       src,
@@ -3628,7 +3628,46 @@ class CameraGalleryCard extends LitElement {
       stream,
       addon: String(this.config?.nvr_addon || DEFAULT_NVR_ADDON),
       poster,
+      quiet,
     };
+  }
+
+  /** The clip under the player would keep playing (and talking) otherwise. */
+  _pausePreviewClip() {
+    this.renderRoot?.querySelector("#preview-video-host video")?.pause?.();
+  }
+
+  /** BL-008: the viewer scrolled the strip and let it come to rest: play the NVR's Low stream of the moment it
+   * rests on, quietly (no progress, no errors; it shows itself once it plays). Taps, the chevrons, a new day or
+   * a deep link don't get here: only a scroll the viewer made. `nvr_autoplay: false` turns this off. */
+  _autoNvr() {
+    if (this._nvrChannel() === null || this.config?.nvr_autoplay === false) return;
+    if (this._isLiveActive() || this._selectMode) return;
+    const item = this._selectedItem();
+    if (!item?.src || !Number.isFinite(item.dtMs)) return;
+    if (this._nvr?.src === item.src) return; // already playing (or loading) that one
+    this._startNvr(item.src, item.dtMs, "sub", { quiet: true });
+  }
+
+  /** BL-008: have the add-on list this camera's day before the strip comes to rest (see warmNvr). */
+  _warmNvr() {
+    const channel = this._nvrChannel();
+    if (channel === null || this.config?.nvr_autoplay === false || !this._hass) return;
+    warmNvr(this._hass, String(this.config?.nvr_addon || DEFAULT_NVR_ADDON), channel);
+  }
+
+  /** The item the viewer shows ({ src, dtMs, … }), resolved the way render resolves it. */
+  _selectedItem() {
+    const base = this._computeBaseList();
+    const filteredAll = (base?.objFiltered || []).filter(
+      (x) => this._matchesTypeFilter(x.src) && (!this._filterFavorites || this._favorites.has(x.src))
+    );
+    if (!filteredAll.length) return null;
+    const cap = this.config?.max_media ?? DEFAULT_MAX_MEDIA;
+    const filtered = this._injectExpandedClusterMembers(filteredAll.slice(0, Math.min(cap, filteredAll.length)));
+    if (!filtered.length) return null;
+    const idx = Math.min(Math.max(this._selectedIndex ?? 0, 0), filtered.length - 1);
+    return filtered[idx] ?? null;
   }
 
   _stopNvr() {
@@ -5101,6 +5140,7 @@ class CameraGalleryCard extends LitElement {
 
   _onScrubPointerDown(e) {
     if (!this._scrubEnabled() || this._selectMode) return;
+    this._warmNvr();
     if (e.pointerType === "mouse" && e.button !== 0) return;
     const strip = e.currentTarget;
     this._stripScrubPointerId = e.pointerId;
@@ -5196,6 +5236,7 @@ class CameraGalleryCard extends LitElement {
     }
     this._scrubbing = false;
     this.requestUpdate();
+    this._autoNvr();
   }
 
   /** What the viewer shows while scrubbing: the image the strip already
@@ -5675,6 +5716,10 @@ class CameraGalleryCard extends LitElement {
   updated(changedProps) {
     const dayChanged = changedProps.has("_selectedDay");
     const filterChanged = changedProps.has("_objectFilters");
+    if (!this._nvrWarmed && this._hass) {
+      this._nvrWarmed = true;
+      this._warmNvr();
+    }
 
     // Start/stop the talkback-bar waveform loop based on mic state.
     if (changedProps.has("_micState")) {
@@ -6264,9 +6309,11 @@ class CameraGalleryCard extends LitElement {
                   .stream=${this._nvr.stream}
                   .addon=${this._nvr.addon}
                   .poster=${this._nvr.poster}
+                  .quiet=${!!this._nvr.quiet}
                   @nvr-close=${() => this._stopNvr()}
+                  @nvr-reveal=${() => this._pausePreviewClip()}
                   @nvr-stream=${(e) => {
-                    if (this._nvr) this._nvr = { ...this._nvr, stream: e.detail.stream };
+                    if (this._nvr) this._nvr = { ...this._nvr, stream: e.detail.stream, quiet: false };
                   }}
                 ></cgc-nvr-player>`
               : html``}

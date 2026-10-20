@@ -13,10 +13,33 @@ export const nvrPlayerStyles = css`
     color: #fff;
     font-size: 13px;
     --nvr-bar-h: 40px;
+    transition: opacity 0.15s;
   }
-  .nvr {
+  /* A quiet start loads unseen (the host's picture stays visible) until the video plays. */
+  :host([quiet]:not([revealed])) {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .nvr,
+  .nvr-stage {
     position: absolute;
     inset: 0;
+  }
+  .nvr.fs {
+    background: #000;
+  }
+  /* Full screen on a portrait screen (an app's WebView can't turn the screen): turn the picture, so it is
+     landscape with the phone held sideways. A landscape screen (turned by Chrome, or by the phone) needs nothing. */
+  @media (orientation: portrait) {
+    .nvr.fs .nvr-stage {
+      inset: auto;
+      top: 50%;
+      left: 50%;
+      width: 100vh;
+      height: 100vw;
+      transform: translate(-50%, -50%) rotate(var(--nvr-rot, 90deg));
+      touch-action: none;
+    }
   }
   /* The bar has its own strip, so it never covers the video's native controls (iOS puts some at the top). */
   .nvr-video {
@@ -167,7 +190,10 @@ export const nvrPlayerStyles = css`
   .nvr-res button.on {
     background: var(--primary-color, #03a9f4);
   }
-  .nvr-close {
+  .nvr-gap {
+    margin-left: auto;
+  }
+  .nvr-icon {
     width: 28px;
     height: 28px;
     flex: none;
@@ -180,7 +206,7 @@ export const nvrPlayerStyles = css`
     color: #fff;
     cursor: pointer;
   }
-  .nvr-close ha-icon {
+  .nvr-icon ha-icon {
     --mdc-icon-size: 18px;
   }
 `;
