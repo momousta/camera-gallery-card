@@ -6,11 +6,12 @@ It lives in `/share/dev/camera-gallery-card` until the owner pushes it to his Gi
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything but don't push").
 
-- **Now:** build `3.1.0-owner.7` (`?v=3d277e449f92`) since 2026-10-19 16:33: NVR recordings from an exact moment
-  (BL-008, Low / High, needs the **NVR Playback** add-on `/addons/nvr_playback`). Check the resource with
-  `node deploy/ha-deploy.mjs status`.
+- **Now:** build `3.1.0-owner.8` (`?v=1bd78a4a0ec3`) since 2026-10-19 19:13: NVR recordings from an exact moment
+  (BL-008, Low / High, needs the **NVR Playback** add-on `/addons/nvr_playback`, 0.2.0+ for the instant replay
+  engine). Check the resource with `node deploy/ha-deploy.mjs status`.
 - **Earlier builds**, each saved in `/share/backups/bl002/<build>-<v>/`. To go back to one, copy both files into
   `dist/` and run `switch`.
+  - `3.1.0-owner.7` (`?v=3d277e449f92`, BL-008 with the download engine): `owner.7-3d277e449f92/`.
   - `3.1.0-owner.6` (`?v=76df89c30952`, deep links): `owner.6-76df89c30952/`.
   - `3.1.0-owner.5` (`?v=b3fa1f014fd6`, BL-007): `owner.5-b3fa1f014fd6/`.
   - `3.1.0-owner.4` (`?v=514a65062fdf`, BL-006): `owner.4-514a65062fdf/`.
@@ -83,6 +84,14 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
   - Channel map confirmed from each camera's burned-in name.
   - The harness answers the `supervisor/api` calls itself, because the Supervisor refuses them from add-ons. It
     forwards the ingress requests through a temporary in-container forwarder (removed after the tests).
+- **owner.8 with add-on 0.2.0 (the NVR's own protocol)**, live dashboards (Pixel 6 viewport, 15 Mbps Wi-Fi):
+  - Front Right, 16 min into its recording → Low: playing 2.1 s after the tap (v1: 10–19 s). The player's clock
+    and the camera's burned-in clock both read 05:15:59 PM.
+  - Backyard Right → High (H.264 2560×1440): playing in 3.0 s, no stall in 20 s, 15 s buffered ahead by then.
+  - High on the 12 MP HEVC cameras: the browser without HEVC says so in 0.8 s (the codec arrives with the first
+    frames).
+  - Timeline, Front Right 95 min back → Low: playing in 2.6 s, clock on the moment; closing returns to the track.
+  - Regression: `tlopen` (Open camera lands on the same file) and `cal` (calendar) unchanged.
 - **Not checked:** real phones, iOS Safari (native HLS, HEVC), live WebRTC and talkback (WebRTC doesn't run in
   headless Chromium).
 
@@ -90,7 +99,8 @@ Harness and results: `/share/dev/bl002-work`.
 
 - Scripts: `harness/measure_golive.mjs --script touch3|fast|staricon|count|preload|browsefull|cal|tl|tlopen|nvr|tlnvr`
   (`tl` with `--tag camera-timeline-card --view timeline [--shot file.png]`; `nvr` / `tlnvr` with
-  `--nvr <forwarder> --nvr-ingress <ingress path> [--nvrstream sub|main] [--nvrat <ms>] [--tlnvr '{entity: ch}']`).
+  `--nvr <forwarder> --nvr-ingress <ingress path> [--nvrstream sub|main] [--nvrat <ms>] [--nvrwatch <ms>]
+[--tlnvr '{entity: ch}']`; `--nvrwatch` counts the stalls while playing).
 - Results: `results/golive-*.jsonl`, `results/star-*.jsonl` and `results/live.jsonl`.
 
 ## What the fork adds on top of v3.1.0
@@ -124,6 +134,8 @@ Harness and results: `/share/dev/bl002-work`.
 | `build: fork version 3.1.0-owner.6`                            | Version shown in the bundle banner                                                                                                                                                                                                                                         | The live build                                                                                                    |
 | `feat(nvr): play the NVR recording from the selected moment…`  | `<cgc-nvr-player>` (src/nvr): ingress session + add-on lookup, progress while the NVR file downloads, hls.js or native HLS from the moment, Low / High, next file at the end. Gallery pill `nvr` (`nvr_channel`, `nvr_addon`), timeline full view (cameras' `nvr_channel`) | BL-008: owner asked for low / high NVR playback from the moment; HA's own Reolink playback fails on this firmware |
 | `build: fork version 3.1.0-owner.7`                            | Version shown in the bundle banner                                                                                                                                                                                                                                         | The live build                                                                                                    |
+| `feat(nvr): progress for the add-on's replay engine`           | Status `engine` (`replay`/`download`) and the replay states; "Opening the … recording" with no "skipping N min", polled every 150 ms                                                                                                                                       | Add-on 0.2.0 plays the moment through the NVR's own protocol, ready in about a second                             |
+| `build: fork version 3.1.0-owner.8`                            | Version shown in the bundle banner                                                                                                                                                                                                                                         | The live build                                                                                                    |
 
 ## Build and test
 
