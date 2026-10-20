@@ -9,7 +9,7 @@ owner's "push everything".
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything").
 
-- **Now:** build `3.1.0-owner.12` (`?v=aa147f734a4a`) since 2026-10-20 12:18: NVR recordings from an exact moment.
+- **Now:** build `3.1.0-owner.13` (`?v=73634d48ca26`) since 2026-10-20 12:56: NVR recordings from an exact moment.
   Needs the **NVR Playback** add-on `/addons/nvr_playback`, 0.2.1+ (0.4.0+ to save snapshots and clips). Check
   the resource with `node deploy/ha-deploy.mjs status`. BL-008 so far:
   - Low / High; the strip coming to rest plays Low quietly;
@@ -20,10 +20,12 @@ owner's "push everything".
   - snapshot and record buttons that save to the phone (owner.12);
   - a swipe on the picture opens the next / previous camera at the same moment, streaming on in the same quality,
     or its closest snapshot (`swipe_cameras`; owner.12). The timeline's full view swipes the same way.
+  - owner.13: swipes on snapshots and GIFs also when they start on a chevron, and in the image full screen.
   - The cars page (the Vehicle Intelligence card's Recording button) creates the same `<cgc-nvr-player>`, so every
     player change reaches it with nothing to change there.
 - **Earlier builds**, each saved in `/share/backups/bl002/<build>-<v>/`. To go back to one, copy both files into
   `dist/` and run `switch`.
+  - `3.1.0-owner.12` (`?v=aa147f734a4a`, save to the phone, swipe between cameras): `owner.12-aa147f734a4a/`.
   - `3.1.0-owner.11` (`?v=7bcf110dcdb8`, double-tap skip, pinch zoom): `owner.11-7bcf110dcdb8/`.
   - `3.1.0-owner.10` (`?v=df69b8b421eb`, the player's own controls, turned seek bar, landscape gallery images):
     `owner.10-df69b8b421eb/`.
@@ -189,6 +191,24 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
       (its closest frame, the stream kept) → Left Front (channel 1, playing).
   - **Regression:** double-tap skips, the streak, pinch 2.5×, panning, the chip and full-screen resets, the
     gallery's image pinch, and the cars page (the same results there).
+- **owner.13** (10-20 12:56), live dashboards, Pixel 6 viewport, real CDP touches (`--script stillswipe`, the
+  owner's flow: the page opens live, a tap on a thumbnail, then swipes):
+  - **The owner's report:** "swiping doesn't work on still images or the GIFs, only when streaming it swipes".
+  - **Causes:**
+    - a swipe starting on a chevron (shown for a few seconds after a tap, at the picture's edges, where a thumb
+      starts a swipe) was ignored. And the browser took the gesture there: the chevron's `overflow: hidden`
+      makes it a scroll container, where the preview's `touch-action: pan-y` no longer applies, so the pointer
+      was cancelled after the first move;
+    - the image full screen had no swipe at all.
+    - The stream player covers the chevrons, so streaming swipes worked.
+  - **Now:**
+    - from the right chevron, all moves arrive and the swipe opens Front (camera1);
+    - real taps on the chevrons still step to the next / previous snapshot of the same camera;
+    - image full screen: Front Right → Front → Doorbell → Left Front, each opened full screen (turned on this
+      portrait screen, the document still full screen).
+  - **Regression:** the streaming flows (`nvrswipe`): snapshot → Front; stream → Doorbell (stream kept) → Left
+    Front streaming; full-screen stream → Right Front, still full screen.
+  - The swipe state no longer re-renders the card on every finger move.
 - **Not checked:** real phones, iOS Safari (native HLS, HEVC), live WebRTC and talkback (WebRTC doesn't run in
   headless Chromium). The HA app's WebView was emulated by the portrait screen without an orientation lock.
 
@@ -244,6 +264,8 @@ Harness and results: `/share/dev/bl002-work`.
 | `build: fork version 3.1.0-owner.11`                                                              | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | The live build                                                                                                                                                                                       |
 | `feat(nvr): save snapshots and clips to the phone; swipe between cameras`                         | Player: snapshot (the frame on screen, posted to the add-on) and record (the stretches played, cut by the add-on into an MP4) buttons, REC chip, toasts; downloads from the add-on (the HA app keeps the name); a clip is saved on Low / High, the next recording, close, or its longest. A horizontal swipe on the picture fires a cancelable `nvr-swipe`; a re-attached player starts again where it was; `fullscreen` starts it full screen. Gallery: `swipe_cameras` (the timeline cameras' shape) → the next / previous camera's page at the same moment (`cgc_near`, `cgc_nvr`, `cgc_fs`), streaming on, or its closest snapshot; a camera without NVR passes the stream on. Timeline full view: the same between its cameras | Owner 10-20 11:17: snapshot / record buttons saving to the phone; swipe left / right to the next camera at the same moment, same quality when streaming, the doorbell only its snapshot              |
 | `build: fork version 3.1.0-owner.12`                                                              | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | The live build                                                                                                                                                                                       |
+| `fix(swipe): swipe on snapshots and GIFs from the chevrons and in the image full screen`          | A swipe may start on a chevron (no pointer capture there, so a tap still steps through the items); `.pnavbtn { touch-action: pan-y }` (its overflow made it a scroll container where the preview's pan-y didn't apply: the browser took the swipe). The image full screen swipes to the next camera (one finger, not zoomed, along the turned picture), opening its snapshot full screen (`cgc_fs` without `cgc_nvr`); a full-screen stream arriving at a camera without NVR opens its snapshot full screen. The swipe state is no longer reactive                                                                                                                                                                                  | Owner 10-20 12:41: "swiping doesn't work on still images or the GIFs, only when streaming it swipes"                                                                                                 |
+| `build: fork version 3.1.0-owner.13`                                                              | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | The live build                                                                                                                                                                                       |
 
 ## Build and test
 
