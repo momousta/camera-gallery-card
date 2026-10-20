@@ -238,6 +238,7 @@ describe("helpers", () => {
     expect(progressDetail(st({ target_s: 10, eta_s: 0 }))).toBe("42%");
     expect(progressDetail(st({ state: "queued" }))).toBe("Waiting for another download to finish");
     expect(progressDetail(null)).toBe("");
+    expect(progressDetail(st({ engine: "replay", state: "streaming" }))).toBe("");
   });
 
   it("formats the wait", () => {

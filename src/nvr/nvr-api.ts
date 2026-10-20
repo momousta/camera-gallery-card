@@ -17,10 +17,22 @@ export const HLS_JS_PATH = "static/hls.light.min.js";
 /** Re-validate the ingress session this often (the Supervisor keeps a session 15 minutes from its last use). */
 export const SESSION_REFRESH_MS = 60_000;
 
-export type NvrState = "queued" | "downloading" | "complete" | "error" | "cancelled";
+export type NvrState =
+  | "queued"
+  | "downloading"
+  | "complete"
+  | "starting"
+  | "streaming"
+  | "idle"
+  | "error"
+  | "cancelled";
+
+/** "replay": the NVR sends from the moment (add-on 0.2+); "download": the whole file is fetched (fallback). */
+export type NvrEngine = "replay" | "download";
 
 export interface NvrStatus {
   name: string;
+  engine?: NvrEngine;
   channel: number;
   stream: NvrStream;
   state: NvrState;
@@ -247,6 +259,7 @@ export function nextFileTime(status: Pick<NvrStatus, "file_end_ms">): number {
 /** The download progress line under the bar. */
 export function progressDetail(status: NvrStatus | null): string {
   if (!status) return "";
+  if (status.engine === "replay") return ""; // sent from the moment itself: nothing skipped, ready in about a second
   if (status.state === "queued") return "Waiting for another download to finish";
   const pct = Math.round((status.progress ?? 0) * 100);
   const eta = formatEta(status.eta_s);

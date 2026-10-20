@@ -177,13 +177,15 @@ A few notes on the generic walker:
 
 With `nvr_channel` set, the gallery pills get **Low** and **High**. They play the Reolink NVR's own recording from
 the selected item's moment:
-- the progress shows over the snapshot while the NVR file is fetched;
+- playback starts in a second or two, anywhere in a recording (add-on 0.2+);
 - the player's clock shows the moment being watched;
 - Low and High switch in place, and playback continues into the next recording.
 
 Low is the sub stream (H.264, plays everywhere). High is the main stream (HEVC, only where the device decodes
-it). This needs the **NVR Playback** add-on, which fetches the recordings next to the NVR and serves them through
-Home Assistant ingress. The timeline card's cameras take `nvr_channel` too (Low / High in the full view).
+it). This needs the **NVR Playback** add-on. It asks the NVR for the moment through the NVR's own protocol, as the
+Reolink app does, and serves it through Home Assistant ingress. If that protocol is refused, it falls back to
+fetching the recording file, and the progress then shows over the snapshot. The timeline card's cameras take
+`nvr_channel` too (Low / High in the full view).
 
 ### Video controls
 

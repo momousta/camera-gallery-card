@@ -40,6 +40,7 @@ import { nvrPlayerStyles } from "./nvr-player-styles";
 
 const TAG = "cgc-nvr-player";
 const POLL_MS = 400;
+const POLL_REPLAY_MS = 150; // the NVR's replay is ready in about a second
 const KEEPALIVE_MS = 15_000;
 const LIVE_EDGE_MS = 20_000;
 
@@ -202,7 +203,7 @@ export class CgcNvrPlayer extends LitElement {
         throw new NvrError("nvr", `NVR: ${st.error || "the download failed"}`);
       if (st.state === "cancelled") throw new NvrError("gone", "The download was stopped.");
       this._checkCodecs(st, mode);
-      await sleep(POLL_MS);
+      await sleep(st.engine === "replay" ? POLL_REPLAY_MS : POLL_MS);
       if (run !== this._run) return;
       const target = st.target_s ?? 0;
       st = await this._api(`api/status/${st.name}?c=${this._client}&t=${target}`);
@@ -535,7 +536,9 @@ export class CgcNvrPlayer extends LitElement {
       this._phase === "buffering"
         ? "Starting playback…"
         : this._phase === "fetching"
-          ? `Fetching the ${label.toLowerCase()}-resolution recording from the NVR…`
+          ? st?.engine === "replay"
+            ? `Opening the ${label.toLowerCase()}-resolution recording…`
+            : `Fetching the ${label.toLowerCase()}-resolution recording from the NVR…`
           : "Connecting to the NVR…";
     const pct = Math.round((st?.progress ?? 0) * 100);
     return html`<div class="nvr-wait" style=${bg}>
