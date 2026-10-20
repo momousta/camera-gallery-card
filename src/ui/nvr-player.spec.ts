@@ -120,10 +120,11 @@ function makeHass(over: Record<string, (msg: any) => unknown> = {}) {
 
 let resetNvrShared: () => void;
 let warmNvr: (hass: any, addon: string, channel: number) => Promise<void>;
+let fmtTime: (s: number) => string;
 let cookies: string[] = [];
 
 beforeAll(async () => {
-  ({ resetNvrShared, warmNvr } = (await import("../nvr/nvr-player.js")) as any);
+  ({ resetNvrShared, warmNvr, fmtTime } = (await import("../nvr/nvr-player.js")) as any);
 });
 
 beforeEach(() => {
@@ -466,10 +467,10 @@ describe("<cgc-nvr-player>", () => {
       window.dispatchEvent(e);
     };
 
-    it("is the player's own (the native button is hidden), landscape, and turns with the phone", async () => {
+    it("is the player's own (no native controls), landscape, and turns with the phone", async () => {
       installFetch(happyRoute());
       const el = await mount();
-      expect(video(el).getAttribute("controlslist")).toBe("nofullscreen");
+      expect(video(el).hasAttribute("controls")).toBe(false);
       el.shadowRoot.querySelector(".nvr-fs").click();
       await flush();
       await el.updateComplete;
@@ -553,5 +554,136 @@ describe("<cgc-nvr-player>", () => {
     vi.setSystemTime(NOW.getTime() + 61_000);
     await warmNvr(makeHass(), "local_nvr_playback", 7);
     expect(calls.filter((c) => c.url === `${BASE}api/warm`)).toHaveLength(1);
+  });
+
+  describe("the overlay controls", () => {
+    const pe = (type: string, x: number, y: number): any =>
+      new ((window as any).PointerEvent ?? MouseEvent)(type, {
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+      });
+    const ui = (el: any) => el.shadowRoot.querySelector(".nvr-ui");
+    const q = (el: any, sel: string) => el.shadowRoot.querySelector(sel);
+
+    /** A player that plays: 30 minutes long, at 753 s; `paused` is the test's to set. */
+    async function playing(props: Record<string, unknown> = {}) {
+      installFetch(happyRoute({ engine: "replay", state: "streaming" }));
+      const el = await mount(props);
+      await flush(200);
+      const v: any = video(el);
+      const state = { paused: false, t: 753, muted: true };
+      Object.defineProperty(v, "paused", { configurable: true, get: () => state.paused });
+      Object.defineProperty(v, "duration", { configurable: true, get: () => 1800 });
+      Object.defineProperty(v, "currentTime", {
+        configurable: true,
+        get: () => state.t,
+        set: (x: number) => (state.t = x),
+      });
+      Object.defineProperty(v, "muted", {
+        configurable: true,
+        get: () => state.muted,
+        set: (x: boolean) => (state.muted = x),
+      });
+      v.dispatchEvent(new Event("durationchange"));
+      v.dispatchEvent(new Event("playing"));
+      v.dispatchEvent(new Event("timeupdate"));
+      await el.updateComplete;
+      return { el, v, state };
+    }
+
+    it("lie over the video, hide while it plays, and come back with a tap", async () => {
+      const { el, v, state } = await playing();
+      expect(q(el, ".nvr-video").hasAttribute("controls")).toBe(false);
+      expect(ui(el).classList.contains("shown")).toBe(true); // shown a moment when it starts
+      expect(q(el, ".nvr-time").textContent.trim()).toBe("12:33 / 30:00");
+      await vi.advanceTimersByTimeAsync(1900);
+      await el.updateComplete;
+      expect(ui(el).classList.contains("shown")).toBe(false);
+      q(el, ".nvr-tap").click(); // a tap on the picture
+      await el.updateComplete;
+      expect(ui(el).classList.contains("shown")).toBe(true);
+      q(el, ".nvr-tap").click(); // and again: away
+      await el.updateComplete;
+      expect(ui(el).classList.contains("shown")).toBe(false);
+
+      // Paused: they stay.
+      state.paused = true;
+      v.dispatchEvent(new Event("pause"));
+      await vi.advanceTimersByTimeAsync(5000);
+      await el.updateComplete;
+      expect(ui(el).classList.contains("shown")).toBe(true);
+      expect(q(el, ".nvr-big").getAttribute("aria-label")).toBe("Play");
+    });
+
+    it("play / pause and mute", async () => {
+      const { el, state } = await playing();
+      const play = vi.mocked(HTMLMediaElement.prototype.play);
+      const pause = vi.mocked(HTMLMediaElement.prototype.pause);
+      q(el, ".nvr-big").click();
+      expect(pause).toHaveBeenCalledTimes(1);
+      state.paused = true;
+      q(el, ".nvr-big").click();
+      expect(play).toHaveBeenCalled();
+      q(el, ".nvr-mute").click();
+      await el.updateComplete;
+      expect(state.muted).toBe(false);
+      expect(q(el, ".nvr-mute").getAttribute("aria-label")).toBe("Mute");
+    });
+
+    it("the seek bar seeks where the finger lifts, along its own axis, also turned in full screen", async () => {
+      const { el, state } = await playing();
+      const bar = q(el, ".nvr-seek");
+      let rect = { left: 100, width: 200, right: 300, top: 300, height: 20, bottom: 320 };
+      bar.getBoundingClientRect = () => rect as DOMRect;
+      bar.dispatchEvent(pe("pointerdown", 150, 310));
+      await el.updateComplete;
+      expect(el._drag.ratio).toBeCloseTo(0.25);
+      expect(q(el, ".nvr-seek-tip")).not.toBeNull(); // the moment under the finger
+      bar.dispatchEvent(pe("pointermove", 250, 310));
+      await el.updateComplete;
+      expect(q(el, ".nvr-seek-thumb").getAttribute("style")).toBe("left:75%");
+      expect(state.t).toBe(753); // no seek while dragging (each would move the NVR)
+      bar.dispatchEvent(pe("pointerup", 250, 310));
+      expect(state.t).toBe(1350);
+
+      // Turned with the picture (full screen, portrait): the bar runs down the screen, or up it.
+      vi.stubGlobal("matchMedia", (m: string) => ({ matches: m.includes("portrait") }));
+      el._fullscreen = true;
+      el._rot = 90;
+      rect = { left: 380, width: 20, right: 400, top: 100, height: 600, bottom: 700 };
+      bar.dispatchEvent(pe("pointerdown", 390, 250));
+      bar.dispatchEvent(pe("pointerup", 390, 250));
+      expect(state.t).toBe(450); // (250 - 100) / 600 of 1800 s
+      el._rot = -90;
+      bar.dispatchEvent(pe("pointerdown", 390, 250));
+      bar.dispatchEvent(pe("pointerup", 390, 250));
+      expect(state.t).toBe(1350); // (700 - 250) / 600
+
+      bar.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      expect(state.t).toBe(1340);
+    });
+
+    it("a quiet start shows them a moment when it shows itself", async () => {
+      const { el } = await playing({ quiet: true });
+      expect(el.hasAttribute("revealed")).toBe(true);
+      expect(ui(el).classList.contains("shown")).toBe(true);
+      await vi.advanceTimersByTimeAsync(1900);
+      await el.updateComplete;
+      expect(ui(el).classList.contains("shown")).toBe(false);
+    });
+
+    it("times read m:ss, or h:mm:ss from an hour", () => {
+      expect([fmtTime(0), fmtTime(75.9), fmtTime(1800), fmtTime(3725), fmtTime(NaN)]).toEqual([
+        "0:00",
+        "1:15",
+        "30:00",
+        "1:02:05",
+        "0:00",
+      ]);
+    });
   });
 });

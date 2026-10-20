@@ -21,6 +21,7 @@
 
 import { LitElement, html } from "lit";
 
+import { portraitScreen, turnFromMotion } from "../util/landscape";
 import { formatClockFromMs } from "../util/locale";
 import {
   AddonLocator,
@@ -46,7 +47,9 @@ const POLL_MS = 400;
 const POLL_REPLAY_MS = 150; // the NVR's replay is ready in about a second
 const KEEPALIVE_MS = 15_000;
 const LIVE_EDGE_MS = 20_000;
-const WARM_EVERY_MS = 10 * 60_000; // the add-on keeps a listed day for 30 minutes
+const WARM_EVERY_MS = 10 * 60_000; // the add-on keeps a listed day for hours
+const UI_HIDE_MS = 1800; // while playing, the controls hide this long after the last touch
+const SEEK_STEP_S = 10;
 
 let session = new IngressSession();
 let locator = new AddonLocator();
@@ -124,6 +127,25 @@ function loadHlsJs(base) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const stopEvent = (e) => e.stopPropagation();
 
+/** m:ss, or h:mm:ss from an hour on. */
+export function fmtTime(s) {
+  let t = Number.isFinite(s) && s > 0 ? Math.floor(s) : 0;
+  const h = Math.floor(t / 3600);
+  t -= h * 3600;
+  const m = Math.floor(t / 60);
+  const sec = String(t - m * 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+/** The end of the buffered stretch the playhead is in (seconds), or 0. */
+function bufferedEnd(video) {
+  const b = video?.buffered;
+  const t = video?.currentTime ?? 0;
+  if (!b) return 0;
+  for (let i = 0; i < b.length; i++) if (b.start(i) <= t + 0.5 && t <= b.end(i)) return b.end(i);
+  return 0;
+}
+
 export class CgcNvrPlayer extends LitElement {
   static get properties() {
     return {
@@ -144,6 +166,13 @@ export class CgcNvrPlayer extends LitElement {
       _revealed: { state: true },
       _fullscreen: { state: true },
       _rot: { state: true },
+      _ui: { state: true },
+      _paused: { state: true },
+      _muted: { state: true },
+      _pos: { state: true },
+      _dur: { state: true },
+      _buf: { state: true },
+      _drag: { state: true },
     };
   }
 
@@ -167,6 +196,14 @@ export class CgcNvrPlayer extends LitElement {
     this._locked = false;
     this._fsAsked = false;
     this._motionOn = false;
+    this._ui = true; // the overlay controls (they hide while playing, a tap brings them back)
+    this._paused = true;
+    this._muted = true;
+    this._pos = 0;
+    this._dur = 0;
+    this._buf = 0;
+    this._drag = null; // { id, ratio } while a finger drags the seek bar
+    this._hideTimer = 0;
     this._onFsChange = () => this._fsChanged();
     this._onMotion = (e) => this._motion(e);
     this._phase = "idle"; // idle | starting | fetching | buffering | playing | error
@@ -195,6 +232,7 @@ export class CgcNvrPlayer extends LitElement {
     document.removeEventListener("fullscreenchange", this._onFsChange);
     document.removeEventListener("webkitfullscreenchange", this._onFsChange);
     this._run++;
+    clearTimeout(this._hideTimer);
     this._teardown();
     this._leftFullscreen();
   }
@@ -490,9 +528,12 @@ export class CgcNvrPlayer extends LitElement {
   // ── video events ────────────────────────────────────────────────────
 
   _onTimeUpdate(e) {
+    const video = e.target;
+    if (!this._drag) this._pos = video.currentTime;
+    this._buf = bufferedEnd(video);
     if (!this._status) return;
-    this._clock = clockAt(this._status, e.target.currentTime);
-    if (!e.target.paused) {
+    this._clock = clockAt(this._status, video.currentTime);
+    if (!video.paused) {
       if (this._phase === "buffering") this._phase = "playing";
       this._reveal();
     }
@@ -501,14 +542,148 @@ export class CgcNvrPlayer extends LitElement {
   /** started: the video plays (a quiet player shows itself); else it can play (the first frame is up). */
   _onPlaying(started) {
     if (this._phase === "buffering") this._phase = "playing";
-    if (started) this._reveal();
+    if (started) {
+      this._paused = false;
+      this._reveal();
+      this._armHide();
+    }
+  }
+
+  _onDuration(e) {
+    const d = e.target.duration;
+    if (Number.isFinite(d) && d > 0) this._dur = d;
+  }
+
+  _onPlay() {
+    this._paused = false;
+    this._armHide();
+  }
+
+  _onPause() {
+    this._paused = true;
+    this._showUi(false);
   }
 
   _reveal() {
     if (this._revealed) return;
     this._revealed = true;
+    this._showUi(); // shown a moment, so the viewer sees what plays (and Low / High)
     if (this.quiet)
       this.dispatchEvent(new CustomEvent("nvr-reveal", { bubbles: true, composed: true }));
+  }
+
+  // ── the overlay controls ────────────────────────────────────────────
+
+  _showUi(autoHide = true) {
+    this._ui = true;
+    clearTimeout(this._hideTimer);
+    if (autoHide) this._armHide();
+  }
+
+  _armHide() {
+    clearTimeout(this._hideTimer);
+    this._hideTimer = setTimeout(() => {
+      const video = this._video();
+      if (this._drag || !video || video.paused || this._phase !== "playing") return;
+      this._ui = false;
+    }, UI_HIDE_MS);
+  }
+
+  /** A tap on the picture: hide the controls while playing, else show them. */
+  _onTap() {
+    const video = this._video();
+    if (this._ui && video && !video.paused && this._phase === "playing" && !this._drag) {
+      clearTimeout(this._hideTimer);
+      this._ui = false;
+    } else {
+      this._showUi();
+    }
+  }
+
+  _togglePlay() {
+    const video = this._video();
+    if (!video) return;
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+    this._showUi();
+  }
+
+  _toggleMute() {
+    const video = this._video();
+    if (!video) return;
+    video.muted = !video.muted;
+    this._muted = video.muted;
+    this._showUi();
+  }
+
+  /** How far the picture is turned (degrees): full screen on a portrait screen (see the styles). */
+  _turn() {
+    return this._fullscreen && portraitScreen() ? this._rot : 0;
+  }
+
+  /** Where along the seek bar a pointer is (0..1), along the bar's own axis: turned with the picture, the bar
+   * runs down the screen (90°) or up it (-90°). The native video timeline measured the screen's x there. */
+  _seekRatio(e, bar) {
+    const r = bar.getBoundingClientRect();
+    const turn = this._turn();
+    let p;
+    if (turn === 90) p = r.height ? (e.clientY - r.top) / r.height : 0;
+    else if (turn === -90) p = r.height ? (r.bottom - e.clientY) / r.height : 0;
+    else p = r.width ? (e.clientX - r.left) / r.width : 0;
+    return Math.min(1, Math.max(0, p));
+  }
+
+  _seekDown(e) {
+    if (!this._dur || (e.pointerType === "mouse" && e.button !== 0)) return;
+    e.preventDefault();
+    const bar = e.currentTarget;
+    try {
+      bar.setPointerCapture(e.pointerId);
+    } catch {
+      /* not capturable (tests) */
+    }
+    this._drag = { id: e.pointerId, ratio: this._seekRatio(e, bar) };
+    this._showUi(false);
+  }
+
+  _seekMove(e) {
+    if (!this._drag || e.pointerId !== this._drag.id) return;
+    this._drag = { ...this._drag, ratio: this._seekRatio(e, e.currentTarget) };
+  }
+
+  _seekUp(e) {
+    if (!this._drag || e.pointerId !== this._drag.id) return;
+    const ratio = this._seekRatio(e, e.currentTarget);
+    this._drag = null;
+    this._seekTo(ratio * this._dur); // on release: every seek moves the NVR
+    this._showUi();
+  }
+
+  _seekCancel(e) {
+    if (!this._drag || e.pointerId !== this._drag.id) return;
+    this._drag = null;
+    this._showUi();
+  }
+
+  _seekKey(e) {
+    const step =
+      e.key === "ArrowRight" || e.key === "ArrowUp"
+        ? SEEK_STEP_S
+        : e.key === "ArrowLeft" || e.key === "ArrowDown"
+          ? -SEEK_STEP_S
+          : 0;
+    if (!step) return;
+    e.preventDefault();
+    this._seekTo((this._video()?.currentTime ?? 0) + step);
+    this._showUi();
+  }
+
+  _seekTo(t) {
+    const video = this._video();
+    if (!video) return;
+    const end = this._dur || video.duration || 0;
+    video.currentTime = Math.min(Math.max(0, t), Math.max(0, end - 0.5));
+    this._pos = video.currentTime;
   }
 
   _onEnded() {
@@ -619,11 +794,8 @@ export class CgcNvrPlayer extends LitElement {
   }
 
   _motion(e) {
-    const x = e?.accelerationIncludingGravity?.x;
-    if (typeof x !== "number") return;
-    // Gravity along the phone's x axis: its top is to the left (x > 0) or to the right (x < 0).
-    if (x > 6 && this._rot !== 90) this._rot = 90;
-    else if (x < -6 && this._rot !== -90) this._rot = -90;
+    const next = turnFromMotion(e?.accelerationIncludingGravity?.x, this._rot);
+    if (next !== this._rot) this._rot = next;
   }
 
   // ── render ──────────────────────────────────────────────────────────
@@ -631,6 +803,7 @@ export class CgcNvrPlayer extends LitElement {
   render() {
     const locale = this.hass?.locale;
     const waiting = this._phase !== "playing" && (!this.quiet || this._revealed);
+    const shown = this._ui || this._phase !== "playing" || this._paused || !!this._drag;
     return html`
       <div
         class="nvr ${this._fullscreen ? "fs" : ""}"
@@ -648,23 +821,82 @@ export class CgcNvrPlayer extends LitElement {
             class="nvr-video"
             playsinline
             muted
-            controls
-            controlslist="nofullscreen"
             @timeupdate=${(e) => this._onTimeUpdate(e)}
+            @durationchange=${(e) => this._onDuration(e)}
+            @loadedmetadata=${(e) => this._onDuration(e)}
+            @progress=${(e) => (this._buf = bufferedEnd(e.target))}
+            @play=${() => this._onPlay()}
+            @pause=${() => this._onPause()}
+            @volumechange=${(e) => (this._muted = e.target.muted)}
             @playing=${() => this._onPlaying(true)}
             @canplay=${() => this._onPlaying(false)}
             @ended=${() => this._onEnded()}
             @error=${() => this._onVideoError()}
           ></video>
+          <div class="nvr-tap" @click=${() => this._onTap()}></div>
           ${waiting ? this._renderWait() : ""}
-          <div class="nvr-bar">
-            <span class="nvr-tag"><ha-icon icon="mdi:filmstrip-box"></ha-icon>NVR</span>
-            <span class="nvr-clock">${formatClockFromMs(this._clock ?? NaN, locale)}</span>
-            ${this.bare
-              ? html`<span class="nvr-gap"></span>${this._renderFullscreen()}`
-              : this._renderControls()}
+          <div class="nvr-ui ${shown ? "shown" : ""}">
+            <div class="nvr-bar">
+              <span class="nvr-tag"><ha-icon icon="mdi:filmstrip-box"></ha-icon>NVR</span>
+              <span class="nvr-clock">${formatClockFromMs(this._clock ?? NaN, locale)}</span>
+              <span class="nvr-gap"></span>
+              ${this.bare ? "" : this._renderControls()}
+            </div>
+            ${this._phase === "playing"
+              ? this._renderTransport(locale)
+              : html`<div class="nvr-ctl nvr-ctl-min">${this._renderFullscreen()}</div>`}
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  _renderTransport(locale) {
+    const dur = this._dur;
+    const pos = this._drag ? this._drag.ratio * dur : this._pos;
+    const pct = dur ? Math.min(100, Math.max(0, (pos / dur) * 100)) : 0;
+    const buf = dur ? Math.min(100, (this._buf / dur) * 100) : 0;
+    const play = this._paused ? "Play" : "Pause";
+    return html`
+      <button class="nvr-big" title=${play} aria-label=${play} @click=${() => this._togglePlay()}>
+        <ha-icon icon=${this._paused ? "mdi:play" : "mdi:pause"}></ha-icon>
+      </button>
+      <div class="nvr-ctl">
+        <span class="nvr-time">${fmtTime(pos)} / ${fmtTime(dur)}</span>
+        <div
+          class="nvr-seek ${this._drag ? "drag" : ""}"
+          role="slider"
+          tabindex="0"
+          aria-label="Seek"
+          aria-valuemin="0"
+          aria-valuemax=${Math.round(dur)}
+          aria-valuenow=${Math.round(pos)}
+          @pointerdown=${(e) => this._seekDown(e)}
+          @pointermove=${(e) => this._seekMove(e)}
+          @pointerup=${(e) => this._seekUp(e)}
+          @pointercancel=${(e) => this._seekCancel(e)}
+          @keydown=${(e) => this._seekKey(e)}
+        >
+          <div class="nvr-seek-track">
+            <div class="nvr-seek-buf" style="width:${buf}%"></div>
+            <div class="nvr-seek-fill" style="width:${pct}%"></div>
+          </div>
+          <div class="nvr-seek-thumb" style="left:${pct}%"></div>
+          ${this._drag
+            ? html`<div class="nvr-seek-tip" style="left:${pct}%">
+                ${formatClockFromMs(this._status ? clockAt(this._status, pos) : NaN, locale)}
+              </div>`
+            : ""}
+        </div>
+        <button
+          class="nvr-icon nvr-mute"
+          title=${this._muted ? "Unmute" : "Mute"}
+          aria-label=${this._muted ? "Unmute" : "Mute"}
+          @click=${() => this._toggleMute()}
+        >
+          <ha-icon icon=${this._muted ? "mdi:volume-off" : "mdi:volume-high"}></ha-icon>
+        </button>
+        ${this._renderFullscreen()}
       </div>
     `;
   }
@@ -696,7 +928,6 @@ export class CgcNvrPlayer extends LitElement {
             </button>`
         )}
       </span>
-      ${this._renderFullscreen()}
       <button
         class="nvr-icon nvr-close"
         title="Back to the snapshots"

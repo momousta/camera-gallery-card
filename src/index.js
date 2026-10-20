@@ -48,6 +48,7 @@ import { calendarPickerStyles } from "./ui/calendar-picker-styles";
 // BL-007: the multi-camera timeline card ships in the same bundle (<camera-timeline-card>).
 import "./timeline/timeline-card.js";
 import { warmNvr } from "./nvr/nvr-player.js";
+import { TurnWatcher, portraitScreen, unturn } from "./util/landscape";
 import { DEFAULT_NVR_ADDON, nvrChannelOf } from "./nvr/nvr-api";
 import { ItemPipelineClient } from "./data/item-pipeline";
 import { parseUrlActions } from "./data/url-actions";
@@ -460,6 +461,10 @@ class CameraGalleryCard extends LitElement {
     this._scrubClickBlockUntil = 0;
     this._stripScrubPointerId = null; // not _scrubPointerId: that one is the video progress bar's
     this._scrubGesture = new ScrubGesture({ onSettle: () => this._onScrubSettle() });
+    // BL-008: a landscape picture full screen on a portrait screen is turned (the app's WebView can't turn it).
+    this._fsTurn = new TurnWatcher(() => this.requestUpdate());
+    this._imgFsLandscape = false;
+    this._onScreenTurn = () => this.requestUpdate();
     // BL-006: previews next to the files (`thumbnail_folder`), their preloading, the date calendar.
     this._sidecarMissing = new Set();
     this._lastScrubFrame = "";
@@ -690,8 +695,9 @@ class CameraGalleryCard extends LitElement {
         this._applyZoom();
       } else if (this._zoomIsPanning && e.touches.length === 1 && this._zoomScale > 1) {
         e.preventDefault();
-        this._zoomPanX = this._zoomPanBaseX + (e.touches[0].clientX - this._zoomPanStartX);
-        this._zoomPanY = this._zoomPanBaseY + (e.touches[0].clientY - this._zoomPanStartY);
+        const [dx, dy] = this._zoomVec(e.touches[0].clientX - this._zoomPanStartX, e.touches[0].clientY - this._zoomPanStartY);
+        this._zoomPanX = this._zoomPanBaseX + dx;
+        this._zoomPanY = this._zoomPanBaseY + dy;
         this._clampZoomPan();
         this._applyZoom();
       }
@@ -717,8 +723,9 @@ class CameraGalleryCard extends LitElement {
     this._onZoomMouseMove = (e) => {
       if (!this._zoomIsPanning) return;
       e.preventDefault();
-      this._zoomPanX = this._zoomPanBaseX + (e.clientX - this._zoomPanStartX);
-      this._zoomPanY = this._zoomPanBaseY + (e.clientY - this._zoomPanStartY);
+      const [dx, dy] = this._zoomVec(e.clientX - this._zoomPanStartX, e.clientY - this._zoomPanStartY);
+      this._zoomPanX = this._zoomPanBaseX + dx;
+      this._zoomPanY = this._zoomPanBaseY + dy;
       this._clampZoomPan();
       this._applyZoom();
     };
@@ -739,11 +746,10 @@ class CameraGalleryCard extends LitElement {
       const oldScale = this._zoomScale;
       const newScale = Math.max(1, Math.min(8, oldScale * factor));
       if (newScale !== oldScale) {
-        const lcX = r.left + r.width / 2 - this._zoomPanX;
-        const lcY = r.top + r.height / 2 - this._zoomPanY;
+        const [ax, ay] = this._zoomAnchor(e.clientX, e.clientY, r);
         const k = newScale / oldScale;
-        this._zoomPanX = (e.clientX - lcX) * (1 - k) + this._zoomPanX * k;
-        this._zoomPanY = (e.clientY - lcY) * (1 - k) + this._zoomPanY * k;
+        this._zoomPanX = ax * (1 - k) + this._zoomPanX * k;
+        this._zoomPanY = ay * (1 - k) + this._zoomPanY * k;
         this._zoomScale = newScale;
       }
       if (this._zoomScale <= 1) { this._zoomPanX = 0; this._zoomPanY = 0; }
@@ -2192,6 +2198,32 @@ class CameraGalleryCard extends LitElement {
     }
   }
 
+  /** A screen-space move in the zoomed picture's own frame (it differs when the full-screen picture is turned). */
+  _zoomVec(dx, dy) {
+    return unturn(dx, dy, this._imgFsTurn());
+  }
+
+  /** From the zoomed picture's unmoved centre to a screen point, in the picture's own frame. */
+  _zoomAnchor(clientX, clientY, rect) {
+    const [vx, vy] = this._zoomVec(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2));
+    return [vx + this._zoomPanX, vy + this._zoomPanY];
+  }
+
+  /** How far the full-screen picture is turned (degrees): a landscape image on a portrait screen. */
+  _imgFsTurn() {
+    return this._imgFsOpen && this._imgFsLandscape && portraitScreen() ? this._fsTurn.turn : 0;
+  }
+
+  _onImgFsLoad(e) {
+    const img = e.target;
+    const landscape = img.naturalWidth > img.naturalHeight * 1.05;
+    if (landscape !== this._imgFsLandscape) {
+      this._imgFsLandscape = landscape;
+      this._resetZoom();
+      this.requestUpdate();
+    }
+  }
+
   _toggleFullscreenZoom(clientX, clientY) {
     const host = this._getZoomHost();
     if (!host) return;
@@ -2200,11 +2232,10 @@ class CameraGalleryCard extends LitElement {
     } else {
       const r = host.getBoundingClientRect();
       const newScale = 2.5;
-      const lcX = r.left + r.width / 2;
-      const lcY = r.top + r.height / 2;
+      const [ax, ay] = this._zoomAnchor(clientX, clientY, r);
       const k = newScale;
-      this._zoomPanX = (clientX - lcX) * (1 - k);
-      this._zoomPanY = (clientY - lcY) * (1 - k);
+      this._zoomPanX = ax * (1 - k);
+      this._zoomPanY = ay * (1 - k);
       this._zoomScale = newScale;
       this._clampZoomPan();
       this._applyZoom();
@@ -2541,9 +2572,22 @@ class CameraGalleryCard extends LitElement {
   _openImageFullscreen() {
     this._resetZoom();
     this._imgFsOpen = true;
+    this._imgFsLandscape = false;
     try { this._previewVideoEl?.pause(); } catch (_) {}
-    try { screen.orientation?.lock?.("landscape"); } catch (_) {}
     this._showPills();
+    // BL-008: landscape. The real full screen hides the system bars; Chrome then turns the screen. A WebView (the
+    // Home Assistant app) can't, so a landscape picture is turned on a portrait screen (see _imgFsTurn).
+    this._fsTurn.start();
+    this._portraitMq = window.matchMedia?.("(orientation: portrait)") ?? null;
+    this._portraitMq?.addEventListener?.("change", this._onScreenTurn);
+    this.updateComplete.then(() => {
+      const overlay = this.renderRoot?.querySelector(".img-fs-overlay");
+      const request = overlay?.requestFullscreen || overlay?.webkitRequestFullscreen;
+      if (!this._imgFsOpen || !overlay || !request) return;
+      Promise.resolve(request.call(overlay, { navigationUI: "hide" }))
+        .then(() => screen.orientation?.lock?.("landscape"))
+        .catch(() => {});
+    });
     if (!this._onImgFsKeydown) {
       this._onImgFsKeydown = (e) => {
         if (!this._imgFsOpen) return;
@@ -2566,7 +2610,17 @@ class CameraGalleryCard extends LitElement {
 
   _closeImageFullscreen() {
     this._resetZoom();
+    const overlay = this.renderRoot?.querySelector(".img-fs-overlay");
+    if (overlay && this.renderRoot?.fullscreenElement === overlay) {
+      try {
+        Promise.resolve((document.exitFullscreen || document.webkitExitFullscreen)?.call(document)).catch(() => {});
+      } catch (_) {}
+    }
     this._imgFsOpen = false;
+    this._imgFsLandscape = false;
+    this._fsTurn.stop();
+    this._portraitMq?.removeEventListener?.("change", this._onScreenTurn);
+    this._portraitMq = null;
     if (this._onImgFsKeydown) {
       window.removeEventListener("keydown", this._onImgFsKeydown);
     }
@@ -6914,16 +6968,18 @@ class CameraGalleryCard extends LitElement {
         ${this._renderDebugModal()}
 
         ${this._imgFsOpen && selectedUrl ? html`
-          <div class="img-fs-overlay" @click=${() => {
+          <div class="img-fs-overlay ${this._imgFsTurn() ? "turned" : ""}" style=${this._imgFsTurn() ? `--cgc-fs-rot:${this._imgFsTurn()}deg` : ""} @click=${() => {
             if (this._zoomScale > 1) {
               this._resetZoom();
             } else {
               this._closeImageFullscreen();
             }
           }}>
+           <div class="img-fs-stage">
             ${selectedIsVideo
               ? html`<video src=${selectedUrl} controls autoplay playsinline ?muted=${this._galleryMuted} @click=${(e) => e.stopPropagation()}></video>`
               : html`<img src=${selectedUrl} alt=""
+                  @load=${(e) => this._onImgFsLoad(e)}
                   @click=${(e) => e.stopPropagation()}
                   @dblclick=${(e) => {
                     if (this.config?.fullscreen_zoom !== false) {
@@ -6945,6 +7001,7 @@ class CameraGalleryCard extends LitElement {
             <button class="img-fs-close" @pointerdown=${(e) => e.stopPropagation()} @click=${(e) => { e.stopPropagation(); this._closeImageFullscreen(); }}>
               <ha-icon icon="mdi:fullscreen-exit"></ha-icon>
             </button>
+           </div>
           </div>
         ` : html``}
 

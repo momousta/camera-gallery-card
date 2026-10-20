@@ -181,9 +181,15 @@ the selected item's moment:
   that half hour;
 - the player's clock shows the moment being watched;
 - Low and High switch in place, and playback continues into the next recording;
-- full screen (the button in the player's bar) is landscape: Chrome turns the screen. In an app's WebView (the
-  Home Assistant app), where a page can't turn the screen, the picture is turned while the screen is portrait;
-  hold the phone sideways. iPhones use their own player.
+- the player has its own controls over the picture (play / pause, a seek bar with the clock time under the
+  finger, mute, full screen; the clock, Low / High and close at the top). They hide while it plays, and a tap
+  brings them back;
+- full screen is landscape: Chrome turns the screen. In an app's WebView (the Home Assistant app), where a page
+  can't turn the screen, the picture is turned while the screen is portrait; hold the phone sideways. The seek
+  bar follows the finger along the turned picture. iPhones use their own player.
+
+The gallery's own full screen (the image button) does the same for a landscape snapshot or GIF: turned on a
+portrait screen, with pinch zoom and panning following the finger.
 
 With `scrub_on_drag`, scrolling the strip and letting it come to rest plays the Low stream of the moment it rests
 on, quietly: nothing shows while it loads, and the video replaces the snapshot once it plays (about a second). A

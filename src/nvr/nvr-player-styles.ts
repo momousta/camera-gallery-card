@@ -41,22 +41,23 @@ export const nvrPlayerStyles = css`
       touch-action: none;
     }
   }
-  /* The bar has its own strip, so it never covers the video's native controls (iOS puts some at the top). */
+  /* The video fills the player; the controls lie over it and hide while it plays (a tap brings them back). */
   .nvr-video {
     position: absolute;
-    top: var(--nvr-bar-h);
-    left: 0;
+    inset: 0;
     width: 100%;
-    height: calc(100% - var(--nvr-bar-h));
+    height: 100%;
     object-fit: contain;
     background: #000;
   }
+  .nvr-tap {
+    position: absolute;
+    inset: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
   .nvr-wait {
     position: absolute;
-    top: var(--nvr-bar-h);
-    right: 0;
-    bottom: 0;
-    left: 0;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -131,22 +132,134 @@ export const nvrPlayerStyles = css`
     font-weight: 800;
     cursor: pointer;
   }
-  .nvr-bar {
+  .nvr-ui {
     position: absolute;
-    top: 0;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .nvr-ui.shown {
+    opacity: 1;
+  }
+  /* Hidden controls can't be pressed: the tap goes to the picture and shows them. */
+  .nvr-ui.shown .nvr-bar,
+  .nvr-ui.shown .nvr-ctl,
+  .nvr-ui.shown .nvr-big {
+    pointer-events: auto;
+  }
+  .nvr-bar,
+  .nvr-ctl {
+    position: absolute;
     left: 0;
     right: 0;
     height: var(--nvr-bar-h);
     padding: 0 8px;
     box-sizing: border-box;
-    background: #000;
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+  .nvr-bar {
+    top: 0;
+    background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0));
+  }
+  .nvr-ctl {
+    bottom: 0;
+    background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.6));
+  }
+  .nvr-ctl-min {
+    justify-content: flex-end;
+    background: none;
+  }
+  .nvr-big {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 56px;
+    height: 56px;
+    transform: translate(-50%, -50%);
+    border: 0;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    cursor: pointer;
+  }
+  .nvr-big ha-icon {
+    --mdc-icon-size: 34px;
+  }
+  .nvr-time {
+    flex: none;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+  }
+  /* The seek bar handles its own drag (along its axis, also when the picture is turned): no browser panning. */
+  .nvr-seek {
+    position: relative;
+    flex: 1;
+    align-self: stretch;
+    min-width: 40px;
+    display: flex;
+    align-items: center;
+    touch-action: none;
+    cursor: pointer;
+    outline: none;
+  }
+  .nvr-seek-track {
+    position: relative;
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.3);
+  }
+  .nvr-seek.drag .nvr-seek-track {
+    height: 6px;
+  }
+  .nvr-seek-buf,
+  .nvr-seek-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+  }
+  .nvr-seek-buf {
+    background: rgba(255, 255, 255, 0.45);
+  }
+  .nvr-seek-fill {
+    background: var(--primary-color, #03a9f4);
+  }
+  .nvr-seek-thumb {
+    position: absolute;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    transform: translate(-50%, -50%);
     pointer-events: none;
   }
-  .nvr-bar > * {
-    pointer-events: auto;
+  .nvr-seek:focus-visible .nvr-seek-thumb {
+    box-shadow: 0 0 0 3px var(--primary-color, #03a9f4);
+  }
+  .nvr-seek-tip {
+    position: absolute;
+    bottom: calc(100% - 4px);
+    transform: translateX(-50%);
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.75);
+    font-size: 12px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    pointer-events: none;
   }
   .nvr-tag,
   .nvr-clock {

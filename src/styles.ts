@@ -177,6 +177,22 @@ export const cardStyles = css`
     -webkit-user-select: none;
     overflow: hidden;
   }
+  /* BL-008: the picture, its arrows and the close button, turned together on a portrait screen (.turned). */
+  .img-fs-stage {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .img-fs-overlay.turned .img-fs-stage {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    width: 100dvh;
+    height: 100dvw;
+    transform: translate(-50%, -50%) rotate(var(--cgc-fs-rot, 90deg));
+  }
   .img-fs-overlay img,
   .img-fs-overlay video {
     max-width: 100%;
