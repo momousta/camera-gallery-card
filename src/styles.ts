@@ -916,6 +916,12 @@ export const cardStyles = css`
     -webkit-tap-highlight-color: transparent;
     position: relative;
     overflow: hidden;
+    /* Owner fork: a swipe to the next camera often starts on a chevron. Its overflow makes it a scroll container,
+       where the preview's pan-y no longer applies, so the browser took the swipe and cancelled the pointer. */
+    touch-action: pan-y;
+  }
+  .img-fs-overlay .pnavbtn {
+    touch-action: none; /* as the full-screen overlay */
   }
   .pnavbtn::before {
     content: "";

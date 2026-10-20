@@ -221,6 +221,13 @@ describe("swiping between cameras (owner fork)", () => {
       navigation_path: "/main-dashboard/doorbell",
       gallery_id: "doorbell",
     },
+    {
+      entity: "sensor.filetrack_left_front",
+      name: "Left Front",
+      navigation_path: "/main-dashboard/left-front",
+      gallery_id: "left_front",
+      nvr_channel: 1,
+    },
   ];
   let moves: { url: string; replace: boolean }[] = [];
   const onMove = (e: Event) =>
@@ -268,7 +275,7 @@ describe("swiping between cameras (owner fork)", () => {
     });
     window.history.replaceState(null, "", "/main-dashboard/front-right");
     await swipe(card, 150); // to the right: the previous one, round to the last
-    expect(moves[1]!.url.startsWith("/main-dashboard/doorbell?cgc_id=doorbell")).toBe(true);
+    expect(moves[1]!.url.startsWith("/main-dashboard/left-front?cgc_id=left_front")).toBe(true);
     await swipe(card, -20); // too short: nothing
     expect(moves).toHaveLength(2);
   });
@@ -363,9 +370,9 @@ describe("swiping between cameras (owner fork)", () => {
     await show(card);
     expect(card._selectedIndex).toBe(0); // 13:30
     expect(card._nvr).toBeNull();
-    await swipe(card, -150); // on, round to the first camera: streaming again, from the same moment
+    await swipe(card, -150); // on to the next camera: streaming again, from the same moment
     expect(query(moves[0]!.url)).toMatchObject({
-      cgc_id: "front_right",
+      cgc_id: "left_front",
       cgc_time: String(at(19, 13, 20)),
       cgc_nvr: "sub",
     });
@@ -390,6 +397,124 @@ describe("swiping between cameras (owner fork)", () => {
     expect(card._swipeContext()).toEqual({ time: ITEMS[0]!.dtMs, stream: null, fullscreen: false });
     card._nvr.revealed = true;
     expect(card._swipeContext()).toMatchObject({ time: ITEMS[0]!.dtMs, stream: "sub" });
+  });
+
+  it("a swipe may start on a chevron (where a thumb starts one); a tap on it still steps through the snapshots", async () => {
+    link({ cgc_id: "front_right", cgc_view: "gallery", cgc_src: ITEMS[1]!.src });
+    const card = makeCard({ swipe_cameras: CAMERAS, persistent_controls: true });
+    await show(card);
+    const right = card.shadowRoot.querySelector(".preview .pnavbtn.right");
+    const left = card.shadowRoot.querySelector(".preview .pnavbtn.left");
+    expect(right).not.toBeNull();
+    const ev = (type: string, x: number) =>
+      new MouseEvent(type, {
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+        clientX: x,
+        clientY: 120,
+      });
+    const capture = vi.fn(); // jsdom has no pointer capture
+    Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
+      configurable: true,
+      value: capture,
+    });
+    // A tap on the left chevron: the previous snapshot, no camera change, the pointer not captured.
+    left.dispatchEvent(ev("pointerdown", 30));
+    left.dispatchEvent(ev("pointerup", 30));
+    left.click();
+    await card.updateComplete;
+    expect(card._selectedIndex).toBe(0);
+    expect(moves).toEqual([]);
+    expect(capture).not.toHaveBeenCalled();
+    // A swipe from the right chevron: the next camera.
+    right.dispatchEvent(ev("pointerdown", 370));
+    right.dispatchEvent(ev("pointermove", 260));
+    right.dispatchEvent(ev("pointerup", 150));
+    await card.updateComplete;
+    expect(query(moves[0]!.url)).toMatchObject({
+      cgc_id: "camera1",
+      cgc_time: String(ITEMS[0]!.dtMs),
+    });
+    delete (HTMLElement.prototype as any).setPointerCapture;
+  });
+
+  it("a swipe in the image full screen opens the next camera's closest snapshot, full screen too", async () => {
+    link({ cgc_id: "front_right", cgc_view: "gallery", cgc_src: ITEMS[1]!.src });
+    const card = makeCard({ swipe_cameras: CAMERAS });
+    await show(card);
+    card._openImageFullscreen();
+    await card.updateComplete;
+    const t = (x: number, y: number) => [{ clientX: x, clientY: y }];
+    // Up or down, or short: nothing (gestures apart: two touches within 300 ms are a double-tap zoom).
+    card._onZoomTouchStart({ touches: t(200, 300), preventDefault() {} });
+    card._onZoomTouchEnd({ touches: [], changedTouches: t(210, 500) });
+    await vi.advanceTimersByTimeAsync(400);
+    card._onZoomTouchStart({ touches: t(200, 300), preventDefault() {} });
+    card._onZoomTouchEnd({ touches: [], changedTouches: t(170, 300) });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(moves).toEqual([]);
+    expect(card._zoomScale).toBe(1);
+    // To the right: the previous camera (round to the last), its snapshot full screen.
+    card._onZoomTouchStart({ touches: t(100, 300), preventDefault() {} });
+    card._onZoomTouchEnd({ touches: [], changedTouches: t(300, 310) });
+    expect(query(moves[0]!.url)).toEqual({
+      cgc_id: "left_front",
+      cgc_view: "gallery",
+      cgc_time: String(ITEMS[1]!.dtMs),
+      cgc_near: "1",
+      cgc_fs: "1",
+    });
+    expect(card._imgFsOpen).toBe(false);
+  });
+
+  it("a turned full-screen picture swipes along itself", async () => {
+    link({ cgc_id: "front_right", cgc_view: "gallery", cgc_src: ITEMS[1]!.src });
+    const card = makeCard({ swipe_cameras: CAMERAS });
+    await show(card);
+    card._openImageFullscreen();
+    await card.updateComplete;
+    vi.spyOn(card, "_imgFsTurn").mockReturnValue(90);
+    // Turned 90 degrees: up the screen is the picture's left, so a finger moving up is a swipe to the left.
+    card._onZoomTouchStart({ touches: [{ clientX: 200, clientY: 600 }], preventDefault() {} });
+    card._onZoomTouchEnd({ touches: [], changedTouches: [{ clientX: 205, clientY: 350 }] });
+    expect(query(moves[0]!.url)).toMatchObject({ cgc_id: "camera1", cgc_fs: "1" });
+  });
+
+  it("arriving full screen on a snapshot opens it full screen; from a full-screen stream, the doorbell too", async () => {
+    link({
+      cgc_id: "front_right",
+      cgc_view: "gallery",
+      cgc_time: String(at(19, 12, 50)),
+      cgc_near: "1",
+      cgc_fs: "1",
+    });
+    const card = makeCard({ swipe_cameras: CAMERAS, nvr_channel: 7 });
+    await show(card);
+    expect(card._selectedIndex).toBe(1);
+    expect(card._imgFsOpen).toBe(true);
+    expect(card._nvr).toBeNull();
+
+    link({
+      cgc_id: "doorbell",
+      cgc_view: "gallery",
+      cgc_time: String(at(19, 13, 20)),
+      cgc_near: "1",
+      cgc_nvr: "main",
+      cgc_fs: "1",
+    });
+    const door = makeCard({ swipe_cameras: CAMERAS, url_id: "doorbell" });
+    await show(door);
+    expect(door._imgFsOpen).toBe(true);
+    expect(door._carry).toMatchObject({ stream: "main", time: at(19, 13, 20) });
+    // Swiping on from its full-screen snapshot: the next camera streams again, full screen.
+    door._onZoomTouchStart({ touches: [{ clientX: 300, clientY: 300 }], preventDefault() {} });
+    door._onZoomTouchEnd({ touches: [], changedTouches: [{ clientX: 100, clientY: 305 }] });
+    expect(query(moves[0]!.url)).toMatchObject({
+      cgc_id: "left_front",
+      cgc_nvr: "main",
+      cgc_fs: "1",
+    });
   });
 
   it("without swipe_cameras (or when this card isn't in it) a swipe still steps through the snapshots", async () => {

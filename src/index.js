@@ -260,11 +260,6 @@ class CameraGalleryCard extends LitElement {
       _showLivePicker: { type: Boolean },
       _showLiveQuickSwitch: { type: Boolean },
       _suppressNextThumbClick: { type: Boolean },
-      _swipeStartX: { type: Number },
-      _swipeStartY: { type: Number },
-      _swipeCurX: { type: Number },
-      _swipeCurY: { type: Number },
-      _swiping: { type: Boolean },
       _thumbMenuItem: { type: Object },
       _thumbMenuOpen: { type: Boolean },
       _viewMode: { type: String }, // "media" | "live"
@@ -651,6 +646,13 @@ class CameraGalleryCard extends LitElement {
     };
 
     this._onZoomTouchStart = (e) => {
+      // Owner fork: one finger in the image full screen, not zoomed, may be a swipe to the next camera (whether
+      // or not zooming is allowed there).
+      if (this._imgFsOpen && e.touches.length === 1 && this._zoomScale <= 1) {
+        this._fsSwipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+      } else if (e.touches.length > 1) {
+        this._fsSwipe = null;
+      }
       if (!this._isZoomAllowed()) return;
       if (isGridLayout(this.config, this._liveLayoutOverride)) return;
 
@@ -707,6 +709,19 @@ class CameraGalleryCard extends LitElement {
     };
 
     this._onZoomTouchEnd = (e) => {
+      const sw = this._fsSwipe;
+      if (sw && e.touches.length === 0) {
+        this._fsSwipe = null;
+        const t = e.changedTouches?.[0];
+        if (t && this._imgFsOpen && this._zoomScale <= 1) {
+          // Along the picture, turned or not.
+          const [fx, fy] = this._zoomVec(t.clientX - sw.x, t.clientY - sw.y);
+          if (Math.abs(fx) >= 50 && Math.abs(fx) > 1.5 * Math.abs(fy) && Date.now() - sw.t < 900) {
+            const ctx = this._swipeContext();
+            this._goToCamera(fx < 0 ? 1 : -1, { ...ctx, fullscreen: true });
+          }
+        }
+      }
       if (e.touches.length < 2) this._zoomIsPinching = false;
       if (e.touches.length === 0) this._zoomIsPanning = false;
       if (this._zoomScale < 1.05) this._resetZoom();
@@ -2611,10 +2626,11 @@ class CameraGalleryCard extends LitElement {
     this.requestUpdate();
   }
 
-  _closeImageFullscreen() {
+  /** keepFullscreen: a swipe to the next camera (whose page asks for full screen again): no explicit exit. */
+  _closeImageFullscreen({ keepFullscreen = false } = {}) {
     this._resetZoom();
     const overlay = this.renderRoot?.querySelector(".img-fs-overlay");
-    if (overlay && this.renderRoot?.fullscreenElement === overlay) {
+    if (overlay && !keepFullscreen && this.renderRoot?.fullscreenElement === overlay) {
       try {
         Promise.resolve((document.exitFullscreen || document.webkitExitFullscreen)?.call(document)).catch(() => {});
       } catch (_) {}
@@ -3727,9 +3743,11 @@ class CameraGalleryCard extends LitElement {
       cgc_near: "1",
     });
     if (stream === "sub" || stream === "main") q.set("cgc_nvr", stream);
-    if (stream && fullscreen) q.set("cgc_fs", "1");
+    if (fullscreen) q.set("cgc_fs", "1");
     const path = next.navigation_path.trim();
     this._stopNvr();
+    // Gone from the page (the browser leaves full screen with it; the next camera asks for it again).
+    if (this._imgFsOpen) this._closeImageFullscreen({ keepFullscreen: true });
     window.history.replaceState(window.history.state, "", `${path}${path.includes("?") ? "&" : "?"}${q}`);
     window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: true } }));
     return true;
@@ -3756,6 +3774,7 @@ class CameraGalleryCard extends LitElement {
     if (!item?.src || !Number.isFinite(at)) return;
     if (this._nvrChannel() === null) {
       this._carry = { src: item.src, time: at, stream };
+      if (fullscreen) this._openImageFullscreen(); // its snapshot, full screen as the stream was
       return;
     }
     this._carry = null;
@@ -4074,6 +4093,7 @@ class CameraGalleryCard extends LitElement {
     }
     this._carry = null;
     if (target.nvr && i >= 0) this._arriveStreaming(filtered[i], target.at ?? target.time, target.nvr, !!target.fs);
+    else if (target.fs && i >= 0) this._openImageFullscreen(); // swiped here from a full-screen snapshot
   }
 
   _setViewMode(nextMode) {
@@ -5123,9 +5143,12 @@ class CameraGalleryCard extends LitElement {
     if (e?.isPrimary === false) return;
 
     const path = e.composedPath?.() || [];
+    // Owner fork: a swipe may start on the chevrons (where a thumb starts one); a tap on them still steps through
+    // the items, so the pointer isn't captured there (the click must reach the button).
+    const onChevron = this._pathHasClass(path, "pnavbtn");
     if (
       this._isInsideTsbar(e) ||
-      this._pathHasClass(path, "pnavbtn") ||
+      (onChevron && !this._swipeCameras().length) ||
       path.some((el) => el?.tagName === "VIDEO") ||
       this._pathHasClass(path, "viewtoggle") ||
       this._pathHasClass(path, "live-picker") ||
@@ -5144,6 +5167,7 @@ class CameraGalleryCard extends LitElement {
     this._swipeCurX = e.clientX;
     this._swipeCurY = e.clientY;
 
+    if (onChevron) return;
     try {
       e.currentTarget?.setPointerCapture?.(e.pointerId);
     } catch (_) {}

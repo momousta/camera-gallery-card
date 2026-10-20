@@ -200,9 +200,11 @@ the selected item's moment:
   their names (Android: Downloads).
 
 **Swiping between cameras** (`swipe_cameras`): a swipe left / right on the picture opens the next / previous
-camera of the list at the same moment, replacing the page (Back goes where you came from). While a recording
-plays, that camera plays its recording from the moment on screen, in the same quality, and full screen stays full
-screen. Otherwise it shows its snapshot closest to the moment. A camera without `nvr_channel` (a doorbell) shows
+camera of the list at the same moment, replacing the page (Back goes where you came from). It works anywhere on
+the picture, also starting on the chevrons (a tap on them still steps through the snapshots), and in the
+gallery's image full screen. While a recording plays, that camera plays its recording from the moment on screen,
+in the same quality. Otherwise it shows its snapshot closest to the moment. Full screen (the player's or the
+image's) stays full screen. A camera without `nvr_channel` (a doorbell) shows
 its closest snapshot, and swiping on from it streams again. The list has the timeline card's `cameras` shape
 (`gallery_id` = each gallery's `url_id`, `navigation_path` = its page), so one YAML anchor serves both. The
 timeline's full view swipes between its cameras the same way.
