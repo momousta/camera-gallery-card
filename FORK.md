@@ -9,7 +9,7 @@ owner's "push everything".
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything").
 
-- **Now:** build `3.1.0-owner.14` (`?v=5efdba698b31`) since 2026-10-20 13:39: NVR recordings from an exact moment.
+- **Now:** build `3.1.0-owner.15` (`?v=55615685f366`) since 2026-10-20 15:35: NVR recordings from an exact moment.
   Needs the **NVR Playback** add-on `/addons/nvr_playback`, 0.2.1+ (0.4.0+ to save snapshots and clips, 0.4.1+ for
   cameras mounted sideways). Check the resource with `node deploy/ha-deploy.mjs status`. BL-008 so far:
   - Low / High; the strip coming to rest plays Low quietly;
@@ -19,16 +19,22 @@ owner's "push everything".
     "NVR" label or clock over it (the camera prints the time);
   - snapshot and record buttons that save to the phone (owner.12);
   - a swipe on the picture opens the next / previous camera at the same moment, streaming on in the same quality,
-    or its closest snapshot (`swipe_cameras`; owner.12). The timeline's full view swipes the same way.
+    or its closest snapshot (`swipe_cameras`; owner.12).
   - owner.13: swipes on snapshots and GIFs also when they start on a chevron, and in the image full screen.
   - owner.14: swipes work every time, also when they start slanted, slowly or on the pill row. The calendar closes
     on a press outside it. Cameras mounted sideways (Left Front, Right Front) show their whole portrait snapshot, and
     stream and save upright (the add-on's `rotate_channels`). New options `gallery_aspect_ratio` and `gallery_fit`;
     `gallery_chevrons_enabled: false` now also hides the image full screen's arrows.
+  - owner.15: one viewer. A tap on a timeline camera opens that camera's page (this gallery) on the frame shown, at
+    the timeline's moment; the timeline's own full view is gone. Low / High there start from that moment, a swipe
+    carries it on, and Back returns to the timeline on the same moment. The cars page's Recording keeps Low / High
+    in full screen: a `bare` player shows its own bar there.
   - The cars page (the Vehicle Intelligence card's Recording button) creates the same `<cgc-nvr-player>`, so every
     player change reaches it with nothing to change there.
 - **Earlier builds**, each saved in `/share/backups/bl002/<build>-<v>/`. To go back to one, copy both files into
   `dist/` and run `switch`.
+  - `3.1.0-owner.14` (`?v=5efdba698b31`, dependable swipes, sideways cameras upright, calendar):
+    `owner.14-5efdba698b31/`.
   - `3.1.0-owner.13` with the first swipe fix (the zoom reset keeping `pan-y`; `?v=c1ff6fe65f17`, live 13:20–13:39):
     `owner.13-c1ff6fe65f17/`. The plain owner.13 (`?v=73634d48ca26`) rebuilds from commit `415f87d`.
   - `3.1.0-owner.12` (`?v=aa147f734a4a`, save to the phone, swipe between cameras): `owner.12-aa147f734a4a/`.
@@ -53,7 +59,8 @@ owner's "push everything".
     Right back 3, Backyard left 4, Front 6, Front right 7. Not on the doorbell, bedroom or kids' room.
   - `swipe_cameras: *swipe_cameras` (the timeline's camera list);
   - `gallery_chevrons_enabled: false` and `gallery_pills: {index_counter: {enabled: false}}` (owner 10-20: no arrows,
-    no picture count);
+    no picture count); on all but the doorbell also `autoplay_all: {enabled: false}` (the auto-play-all pill plays a
+    day's video clips in turn, and only the doorbell has clips);
   - Left Front and Right Front (mounted sideways): `gallery_aspect_ratio: "3:4"` and `gallery_fit: contain`.
 - **Caps:** `max_media: 200` on the 8 cameras with more than 50 clips a day (busiest day 192), and `max_media: 400`
   on the doorbell, which saves a Ring still every 5 minutes since 2026-10-18 (288 a day plus events).
@@ -255,6 +262,25 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
     - Under load (load average 4–5.5), CDP sometimes delivered a double tap's second tap more than 300 ms after
       the first, so it read as two single taps. One run each of the cars page's zoomed full-screen skip and
       middle double tap; each passed in the other run. The tap code is unchanged in owner.14.
+- **owner.15** (10-20 15:35), live dashboards, Pixel 6 viewport, real CDP touches, with NVR Playback 0.4.1
+  (`--script tlpage`, `vifs`, `pills`; `nvrswipe`, `nvrgest` again):
+  - **The owner's ask:** hide auto-play-all except on the doorbell; "the timeline view when I open a camera shows
+    a different view than what we have been fixing"; "on the vehicle when I click on recording and do full screen
+    I no longer see the low and high setting".
+  - **Timeline** (`tlpage`): the timeline set to 14:58, a tap on Left Front's tile → its page in 0.27 s, on the
+    tile's GIF (14:51), the link's moment 14:58 kept; pills full screen, Low, High; Low played from 14:58 (the
+    camera's clock within 0.03 s). The header's back arrow → the timeline, the same element, on 14:58.
+    - First run: the arrow went to the dashboard's first view. Home Assistant's back arrow only steps back when the
+      history entry says where it came `from` (its own navigate writes that); the timeline now writes it too.
+  - **Cars page** (`vifs`, its own viewer on a stand-in photo of Front Right, then Recording): inline, no player bar
+    (the card's own Low / High above); full screen: the player's Low / High and close; High → the player switched
+    (`nvr-stream` "main"; HEVC doesn't decode in headless Chromium); out of full screen, the bar is gone again.
+    The card's own Low / High still showed Low: it doesn't follow `nvr-stream` (the Vehicle Intelligence card's
+    code).
+  - **Pills** (`pills`): the doorbell: auto-play all and full screen; Front Right: full screen, Low, High.
+  - **Regression:** `nvrswipe` (snapshot → Front; stream → Doorbell → Left Front playing; full-screen stream →
+    Right Front, still full screen) and `nvrgest` (skips, streak, pinch 2.5×, panning, a skip while zoomed, the
+    chip and full-screen resets, the gallery image's pinch).
 - **Not checked:** real phones, iOS Safari (native HLS, HEVC), live WebRTC and talkback (WebRTC doesn't run in
   headless Chromium). The HA app's WebView was emulated by the portrait screen without an orientation lock.
 
@@ -314,6 +340,8 @@ Harness and results: `/share/dev/bl002-work`.
 | `build: fork version 3.1.0-owner.13`                                                              | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 | `feat: dependable swipes, upright sideways cameras, calendar closes on an outside press`          | Gallery: the zoom reset restores the preview's `touch-action` (`pan-y`, `auto` live) instead of clearing it; swipes are also read from touch events, start to end (≥ 45 px, within 45°, within 5 s). Player: the same touch swipes (also over the loading / error screen; the pointer path swipes for a mouse only); the add-on's `rotate` turns a portrait channel's video (`.nvr.portrait`, `.nvr-video.quarter`, composed with the zoom), its full screen isn't turned and locks portrait, and snapshots are drawn upright. `OutsidePress`: a press outside the calendar closes it (gallery and Timeline). Options `gallery_aspect_ratio` / `gallery_fit` (gallery only); `gallery_chevrons_enabled` also hides the image full screen's arrows | Owner 10-20 13:08: "swiping doesn't always work, especially on the front and front right cameras"; no arrows, no count; close the calendar on a click outside it; Left Front / Right Front are portrait: GIFs cut off, the stream sideways |
 | `build: fork version 3.1.0-owner.14`                                                              | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
+| `feat: one viewer: timeline cameras open their page; the player's own bar in full screen`         | Timeline: a tap on a camera opens its page (`navigation_path`, with `cgc_src` + `cgc_time` = the track's moment); the full view (its picture, Low / High, swipes) is removed, with `nvr_channel` / `nvr_addon` there. The pushed history entry carries `from`, as HA's navigate does, so HA's back arrow returns to the timeline. Gallery: a link's moment (`_moment`) for its item: Low / High start there and a swipe carries it. Player: a `bare` player shows its own Low / High and close in full screen                                                                                                                                                                                                                                     | Owner 10-20 14:29: "the timeline view when I open a camera shows a different view … fix in one place"; "on the vehicle … full screen I no longer see the low and high setting"                                                             |
+| `build: fork version 3.1.0-owner.15`                                                              | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 
 ## Build and test
 
