@@ -62,8 +62,9 @@ owner's "push everything".
     no picture count); on all but the doorbell also `autoplay_all: {enabled: false}` (the auto-play-all pill plays a
     day's video clips in turn, and only the doorbell has clips);
   - Left Front and Right Front (mounted sideways): `gallery_aspect_ratio: "3:4"` and `gallery_fit: contain`.
-- **Caps:** `max_media: 200` on the 8 cameras with more than 50 clips a day (busiest day 192), and `max_media: 400`
-  on the doorbell, which saves a Ring still every 5 minutes since 2026-10-18 (288 a day plus events).
+- **Caps:** `max_media: 350` on the 7 NVR cameras (busiest day 192 clips, plus 144 stills a day since the 10-minute
+  stills of 2026-10-20), 200 on the bedroom, and `max_media: 400` on the doorbell, which saves a Ring still every 5
+  minutes since 2026-10-18 (288 a day plus events).
 
 Checked against the live frontend (headless Chromium, Pixel 6 viewport, real touch input):
 
