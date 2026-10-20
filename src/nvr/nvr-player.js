@@ -10,10 +10,14 @@
  *   quiet (load unseen: no progress, no error; the player shows itself once the video plays),
  *   label (the camera's name for saved files; without it the add-on uses the NVR's channel name),
  *   fullscreen (start in full screen: the viewer swiped here from a full-screen player)
+ *   still (a snapshot or GIF to show until Low / High is asked for: the gallery's full screen for pictures, so
+ *   pictures and recordings share one viewer: its turn, controls, zoom, swipes; a double tap zooms a picture)
  * Events (bubbling, composed):
  *   nvr-close: the viewer asked to go back to the snapshots; { quiet: true } when a quiet start failed
  *   nvr-stream: { stream } the viewer switched between Low and High
  *   nvr-reveal: a quiet player started playing and showed itself
+ *   nvr-fullscreen: { fullscreen, pseudo } the player went in or out of full screen (pseudo: the browser has no
+ *     element full screen, an iPhone: the player covers the window instead, and its host must not clip it)
  *   nvr-swipe: { dir: 1 next | -1 previous, time: epoch ms on screen, stream, fullscreen } a horizontal swipe on
  *     the picture (cancelable: a host that moves to another camera calls preventDefault, and a clip being
  *     recorded is saved)
@@ -64,6 +68,7 @@ const TAP_MS = 300; // a second tap within this is a double tap (so a single tap
 const SKIP_S = 10; // a double tap on a side: back or forward this much
 const STREAK_MS = 800; // after a double tap, each tap on the same side within this skips again
 const MAX_ZOOM = 8;
+const TAP_ZOOM = 2.5; // a double tap on a picture zooms this far on that point
 const SWIPE_MIN_PX = 50; // a horizontal swipe on the picture: at least this far (and 12 % of its width)
 const SWIPE_MS = 5000; // and no slower (a slow drag across the picture means the same)
 const TOAST_MS = 2600;
@@ -219,6 +224,7 @@ export class CgcNvrPlayer extends LitElement {
       quiet: { type: Boolean, reflect: true },
       label: { type: String },
       fullscreen: { type: Boolean },
+      still: { type: String },
       _phase: { state: true },
       _status: { state: true },
       _error: { state: true },
@@ -240,6 +246,8 @@ export class CgcNvrPlayer extends LitElement {
       _rec: { state: true },
       _toast: { state: true },
       _flash: { state: true },
+      _stillPortrait: { state: true },
+      _pseudo: { state: true },
     };
   }
 
@@ -259,6 +267,10 @@ export class CgcNvrPlayer extends LitElement {
     this.quiet = false;
     this.label = "";
     this.fullscreen = false;
+    this.still = "";
+    this._streaming = false; // Low / High was asked for over a still: it plays the recording now
+    this._stillPortrait = false;
+    this._pseudo = false; // full screen by covering the window (no element full screen: an iPhone)
     this._detached = false;
     this._resumeAt = null;
     this._rec = null; // a clip being recorded: { id, ranges: [[from, to] s], started (promise), maxS }
@@ -290,7 +302,7 @@ export class CgcNvrPlayer extends LitElement {
     this._skipTimer = 0;
     this._onFsChange = () => this._fsChanged();
     this._onMotion = (e) => this._motion(e);
-    this._phase = "idle"; // idle | starting | fetching | buffering | playing | error
+    this._phase = "idle"; // idle | still | starting | fetching | buffering | playing | error
     this._status = null;
     this._error = "";
     this._errorCode = "";
@@ -327,8 +339,9 @@ export class CgcNvrPlayer extends LitElement {
     clearTimeout(this._toastTimer);
     this._finishRecording();
     this._teardown();
+    this._pseudo = false;
     this._leftFullscreen();
-    if (this._phase !== "idle") {
+    if (this._phase !== "idle" && this._phase !== "still") {
       this._detached = true;
       this._resumeAt = this._clock;
     }
@@ -337,10 +350,26 @@ export class CgcNvrPlayer extends LitElement {
   updated() {
     // Hidden (see the styles) while a quiet start loads.
     this.toggleAttribute("revealed", this._revealed);
+    this.toggleAttribute("pseudo", this._pseudo);
   }
 
   willUpdate(changed) {
-    if (!this.hass || !Number.isInteger(this.channel) || !Number.isFinite(this.time)) return;
+    if (changed.has("still")) this._streaming = false;
+    if (this._stillMode()) {
+      // A picture, not a recording: nothing is asked of the NVR until Low / High.
+      if (this._phase !== "still") {
+        this._run++;
+        this._finishRecording();
+        this._teardown();
+        this._phase = "still";
+      }
+      if (changed.has("still")) {
+        this._resetZoom();
+        this._stillPortrait = false;
+      }
+      return;
+    }
+    if (!this._canStream()) return;
     if (changed.has("channel") || changed.has("time") || changed.has("addon")) {
       this._active = isNvrStream(this.stream) ? this.stream : "sub";
       this._resumeAt = null;
@@ -354,8 +383,22 @@ export class CgcNvrPlayer extends LitElement {
   }
 
   firstUpdated() {
-    // Swiped here from full screen: the swipe's touch still allows asking for it (a few seconds).
-    if (this.fullscreen) this._enterFullscreen();
+    // Swiped here from full screen, or a picture's full screen button: the touch still allows asking for it (a
+    // few seconds). A picture without element full screen (an iPhone) covers the window instead.
+    if (!this.fullscreen) return;
+    this._enterFullscreen().then((ok) => {
+      if (!ok && this._phase === "still") this._setPseudo(true);
+    });
+  }
+
+  /** A picture to show (not a recording): `still` set and no Low / High asked for. */
+  _stillMode() {
+    return !!this.still && !this._streaming && !isNvrStream(this.stream);
+  }
+
+  /** The NVR's recording can be asked for (a camera with a channel, at a moment). */
+  _canStream() {
+    return !!this.hass && Number.isInteger(this.channel) && Number.isFinite(this.time);
   }
 
   // ── flow ────────────────────────────────────────────────────────────
@@ -695,7 +738,8 @@ export class CgcNvrPlayer extends LitElement {
     clearTimeout(this._hideTimer);
     this._hideTimer = setTimeout(() => {
       const video = this._video();
-      if (this._drag || !video || video.paused || this._phase !== "playing") return;
+      if (this._drag) return;
+      if (this._phase !== "still" && (!video || video.paused || this._phase !== "playing")) return;
       this._ui = false;
     }, UI_HIDE_MS);
   }
@@ -857,7 +901,8 @@ export class CgcNvrPlayer extends LitElement {
     if (last && now - last.t < TAP_MS && Math.hypot(x - last.x, y - last.y) < 80) {
       clearTimeout(this._tapTimer);
       this._lastTap = null;
-      if (side) this._skipBy(side);
+      if (this._phase === "still") this._zoomToggleAt(x, y);
+      else if (side) this._skipBy(side);
       return;
     }
     this._lastTap = { t: now, x, y };
@@ -909,10 +954,24 @@ export class CgcNvrPlayer extends LitElement {
     if (this._zoom.s !== 1 || this._zoom.x || this._zoom.y) this._zoom = { s: 1, x: 0, y: 0 };
   }
 
+  /** A double tap on a picture: zoom in on that point, or back to the whole picture. */
+  _zoomToggleAt(x, y) {
+    if (this._zoom.s > 1) {
+      this._resetZoom();
+      return;
+    }
+    const f = this._frame();
+    if (!f) return;
+    const s = TAP_ZOOM;
+    const [ux, uy] = unturn(x - f.cx, y - f.cy, this._turn());
+    this._setZoom(s, ux - s * ux, uy - s * uy);
+  }
+
   /** A tap on the picture: hide the controls while playing, else show them. */
   _onTap() {
     const video = this._video();
-    if (this._ui && video && !video.paused && this._phase === "playing" && !this._drag) {
+    const moving = this._phase === "still" || (video && !video.paused && this._phase === "playing");
+    if (this._ui && moving && !this._drag) {
       clearTimeout(this._hideTimer);
       this._ui = false;
     } else {
@@ -949,8 +1008,9 @@ export class CgcNvrPlayer extends LitElement {
     return r === 90 || r === 180 || r === 270 ? r : 0;
   }
 
-  /** The picture stands portrait once turned (a quarter turn of the NVR's landscape picture). */
+  /** The picture stands portrait: a still taller than wide, or the NVR's landscape picture turned a quarter. */
   _portraitContent() {
+    if (this._phase === "still") return this._stillPortrait;
     const r = this._rotation();
     return r === 90 || r === 270;
   }
@@ -1020,6 +1080,16 @@ export class CgcNvrPlayer extends LitElement {
     this._pos = video.currentTime;
   }
 
+  /** A still loaded: which way it stands (portrait pictures fit a portrait screen as they are). */
+  _onStillLoad(e) {
+    const img = e.target;
+    this._stillPortrait = img.naturalHeight > img.naturalWidth;
+    if (this._fullscreen && this._locked)
+      screen.orientation?.lock?.(this._stillPortrait ? "portrait" : "landscape").catch(() => {});
+    if (!this._revealed) this._reveal();
+    else this._showUi();
+  }
+
   _onEnded() {
     if (!this._status) return;
     this._begin(nextFileTime(this._status));
@@ -1035,7 +1105,10 @@ export class CgcNvrPlayer extends LitElement {
   // ── actions ─────────────────────────────────────────────────────────
 
   _switchStream(stream) {
-    if (stream === this._active && this._phase !== "error") return;
+    if (this._phase === "still") {
+      if (!this._canStream()) return;
+      this._streaming = true; // the recording from the picture's moment, in this same viewer
+    } else if (stream === this._active && this._phase !== "error") return;
     this._active = stream;
     this._begin(this._clock ?? this.time);
     this.dispatchEvent(
@@ -1195,7 +1268,12 @@ export class CgcNvrPlayer extends LitElement {
     const at =
       this._status && video ? clockAt(this._status, video.currentTime) : (this._clock ?? this.time);
     const ev = new CustomEvent("nvr-swipe", {
-      detail: { dir, time: Math.round(at), stream: this._active, fullscreen: this._fullscreen },
+      detail: {
+        dir,
+        time: Math.round(at),
+        stream: this._phase === "still" ? null : this._active,
+        fullscreen: this._fullscreen,
+      },
       bubbles: true,
       composed: true,
       cancelable: true,
@@ -1206,6 +1284,10 @@ export class CgcNvrPlayer extends LitElement {
   // ── full screen (landscape) ─────────────────────────────────────────
 
   async _toggleFullscreen() {
+    if (this._pseudo) {
+      this._setPseudo(false);
+      return;
+    }
     if (document.fullscreenElement || document.webkitFullscreenElement) {
       const exit = document.exitFullscreen || document.webkitExitFullscreen;
       try {
@@ -1216,6 +1298,10 @@ export class CgcNvrPlayer extends LitElement {
       return;
     }
     if (await this._enterFullscreen()) return;
+    if (this._phase === "still") {
+      this._setPseudo(true); // no element full screen here (an iPhone): cover the window
+      return;
+    }
     // iPhone: only the video's own full screen, whose player turns with the phone.
     const video = this._video();
     if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
@@ -1255,11 +1341,33 @@ export class CgcNvrPlayer extends LitElement {
         : this._fsAsked;
     const now = !!any && ours;
     if (!any) this._fsAsked = false;
-    if (now === this._fullscreen) return;
+    if (this._pseudo || now === this._fullscreen) return;
     this._fullscreen = now;
     this._resetZoom(); // the frame changed size (and maybe turned)
     if (now) this._startMotion();
     else this._leftFullscreen();
+    this._fsEvent();
+  }
+
+  /** Full screen by covering the window, where the browser has no element full screen (an iPhone). */
+  _setPseudo(on) {
+    if (on === this._pseudo) return;
+    this._pseudo = on;
+    this._fullscreen = on;
+    this._resetZoom();
+    if (on) this._startMotion();
+    else this._leftFullscreen();
+    this._fsEvent();
+  }
+
+  _fsEvent() {
+    this.dispatchEvent(
+      new CustomEvent("nvr-fullscreen", {
+        detail: { fullscreen: this._fullscreen, pseudo: this._pseudo },
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 
   _leftFullscreen() {
@@ -1294,8 +1402,10 @@ export class CgcNvrPlayer extends LitElement {
 
   render() {
     const locale = this.hass?.locale;
-    const waiting = this._phase !== "playing" && (!this.quiet || this._revealed);
-    const shown = this._ui || this._phase !== "playing" || this._paused || !!this._drag;
+    const still = this._phase === "still";
+    const waiting = this._phase !== "playing" && !still && (!this.quiet || this._revealed);
+    const moving = still || (this._phase === "playing" && !this._paused);
+    const shown = this._ui || !moving || !!this._drag;
     const z = this._zoom;
     const zoomed = z.s > 1;
     const rot = this._rotation();
@@ -1308,9 +1418,9 @@ export class CgcNvrPlayer extends LitElement {
     ].filter(Boolean);
     return html`
       <div
-        class="nvr ${this._fullscreen ? "fs" : ""} ${zoomed ? "zoomed" : ""} ${quarter
-          ? "portrait"
-          : ""}"
+        class="nvr ${this._fullscreen ? "fs" : ""} ${this._pseudo ? "pseudo" : ""} ${zoomed
+          ? "zoomed"
+          : ""} ${quarter || (still && this._stillPortrait) ? "portrait" : ""}"
         @pointerdown=${stopEvent}
         @pointerup=${stopEvent}
         @pointercancel=${stopEvent}
@@ -1325,8 +1435,19 @@ export class CgcNvrPlayer extends LitElement {
         @wheel=${{ handleEvent: stopEvent, passive: true }}
       >
         <div class="nvr-stage" style="--nvr-rot:${this._rot}deg">
+          ${still
+            ? html`<img
+                class="nvr-video nvr-still"
+                src=${this.still}
+                alt=""
+                draggable="false"
+                style=${moves.length ? `transform:${moves.join(" ")}` : ""}
+                @load=${(e) => this._onStillLoad(e)}
+              />`
+            : ""}
           <video
             class="nvr-video ${quarter ? "quarter" : ""}"
+            ?hidden=${still}
             style=${moves.length ? `transform:${moves.join(" ")}` : ""}
             playsinline
             muted
@@ -1485,20 +1606,25 @@ export class CgcNvrPlayer extends LitElement {
   }
 
   _renderControls() {
+    const still = this._phase === "still";
     return html`
-      <span class="nvr-res" role="group" aria-label="Resolution">
-        ${NVR_STREAMS.map(
-          (s) =>
-            html`<button
-              class=${s === this._active ? "on" : ""}
-              aria-pressed=${s === this._active ? "true" : "false"}
-              title=${s === "sub" ? "Low resolution (fast)" : "High resolution (slower to start)"}
-              @click=${() => this._switchStream(s)}
-            >
-              ${NVR_STREAM_LABEL[s]}
-            </button>`
-        )}
-      </span>
+      ${still && !this._canStream()
+        ? "" /* a camera without recordings (the doorbell): its picture only */
+        : html`<span class="nvr-res" role="group" aria-label="Resolution">
+            ${NVR_STREAMS.map(
+              (s) =>
+                html`<button
+                  class=${!still && s === this._active ? "on" : ""}
+                  aria-pressed=${!still && s === this._active ? "true" : "false"}
+                  title=${s === "sub"
+                    ? "Low resolution (fast)"
+                    : "High resolution (slower to start)"}
+                  @click=${() => this._switchStream(s)}
+                >
+                  ${NVR_STREAM_LABEL[s]}
+                </button>`
+            )}
+          </span>`}
       <button
         class="nvr-icon nvr-close"
         title="Back to the snapshots"

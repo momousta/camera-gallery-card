@@ -154,6 +154,42 @@ export const cardStyles = css`
     width: 100%;
   }
 
+  /* Owner fork: the player's window-covering full screen (an iPhone, no element full screen) must not be clipped or
+     positioned by the viewer's box: no transform or mask while it lasts. */
+  .preview.pseudo-fs {
+    transform: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+    overflow: visible;
+  }
+
+  /* Owner fork: the full screen button at the bottom right of the picture, as in the NVR player. */
+  .pfs-btn {
+    position: absolute;
+    right: 8px;
+    bottom: 6px;
+    z-index: 11;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+    --mdc-icon-size: 18px;
+  }
+  .pfs-btn.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .pimg {
     display: block;
     height: 100%;
@@ -1281,6 +1317,9 @@ export const cardStyles = css`
   }
   .vid-time.visible {
     opacity: 1;
+  }
+  .vid-time.with-fs {
+    right: 44px;
   }
 
   .gallery-pills {

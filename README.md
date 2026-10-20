@@ -69,7 +69,7 @@ FileTrack is a fork of the archived [files integration by TarheelGrad1998](https
 ### Gallery
 
 - Image & video preview
-- **Fullscreen image viewer** — tap to open in fullscreen, rotates to landscape on mobile, with pinch-to-zoom, pan, double-tap and mouse wheel zoom
+- **Fullscreen image viewer** — tap to open in fullscreen, rotates to landscape on mobile, with pinch-to-zoom, pan, double-tap and mouse wheel zoom (owner fork: snapshots and GIFs open in the NVR player's full screen, see below)
 - Timeline thumbnails with lazy loading
 - Day grouping
 - Filename timestamp parsing
@@ -217,8 +217,15 @@ The Vehicle Intelligence card's **Recording** button opens this same player (`<c
 bundle), so it has the same controls and gestures, with that card's own Low / High and back button above it. In
 full screen, where those can't be seen, the player shows its own Low / High and close, as in the gallery.
 
-The gallery's own full screen (the image button) does the same for a landscape snapshot or GIF: turned on a
-portrait screen, with pinch zoom and panning following the finger.
+**Full screen for snapshots and GIFs** is the same viewer: the full screen button (at the bottom right of the
+picture, where the player has it) opens the picture in `<cgc-nvr-player>`, without a stream. So it turns as a
+recording does (a landscape picture on a portrait screen, not a portrait one), its controls hide and come back on
+a tap, it pinch-zooms and pans, a double tap zooms on that point (again: the whole picture), and a swipe opens the
+next camera at the same moment, full screen. Low / High at its top play that moment's recording right there, and
+it plays on when full screen ends; otherwise leaving full screen returns to the gallery. A camera without
+`nvr_channel` (the doorbell) has no Low / High there. Where the browser has no element full screen (an iPhone),
+the player covers the window instead. Video clips keep the gallery's own full screen, and `fullscreen_zoom` no
+longer applies to pictures.
 
 **Cameras mounted sideways** (a portrait picture): the NVR records the sensor's landscape frame. The add-on's
 `rotate_channels` option (NVR Playback 0.4.1+) says how far to turn a channel. The player then shows it upright,
@@ -238,6 +245,10 @@ fetching the recording file, and the progress then shows over the snapshot.
 ### Video controls
 
 - Video autoplay toggle (gallery)
+- **Auto-play all** (owner fork): plays the day as a time-lapse, forward in time from the selected item (from the
+  day's first when the newest is selected): a snapshot for 1 s, a GIF for 3 s, a clip to its end. It stops at the
+  newest item, on a second tap, or when you pick something else (upstream only went on after a clip ended, so on
+  a gallery of snapshots it did nothing)
 - Separate auto-mute toggle for gallery and live view
 - Per-object filter color customization
 

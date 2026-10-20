@@ -63,127 +63,67 @@ async function renderCard(options: Record<string, unknown> = {}) {
   return card;
 }
 
-const wheel = (deltaY: number): WheelEvent =>
-  new WheelEvent("wheel", { deltaY, clientX: 0, clientY: 0, bubbles: true, cancelable: true });
+// Owner fork (10-20 16:17): a picture's full screen is the NVR player's own (its still mode), the same viewer as
+// a recording's: its turn, controls, zoom and swipes. The gallery's overlay serves video clips only, and
+// `fullscreen_zoom` no longer applies to pictures.
+const playerOf = (card: any) => card.shadowRoot.querySelector(".preview cgc-nvr-player");
 
 describe("fullscreen image viewer zoom (#245)", () => {
-  it("zooms the fullscreen image, never the hidden preview, and resets on close", async () => {
+  it("a picture's full screen is the player's (its own zoom), never the hidden preview's", async () => {
     const card = await renderCard();
     card._previewOpen = true; // the state in which #245 zoomed the hidden preview
     card._openImageFullscreen();
     await card.updateComplete;
-    const fsImg = card.shadowRoot.querySelector(".img-fs-overlay img") as HTMLElement;
-    const preview = card.shadowRoot.querySelector(".preview img.pimg") as HTMLElement;
-    expect(fsImg).not.toBeNull();
-    card.dispatchEvent(wheel(-100));
-    expect(card._zoomScale).toBeGreaterThan(1);
-    expect(fsImg.style.transform).toContain("scale(");
+    expect(playerOf(card)?.still).toBe(IMG);
+    expect(card.shadowRoot.querySelector(".img-fs-overlay")).toBeNull();
+    // A pinch (Ctrl + wheel) over the picture zooms the player's picture; the hidden preview never.
+    const p = playerOf(card);
+    await new Promise((r) => setTimeout(r, 0)); // its full screen is on (here the window-covering one)
+    await p.updateComplete;
+    expect(p._fullscreen).toBe(true);
+    p.shadowRoot.querySelector(".nvr-tap").dispatchEvent(
+      new WheelEvent("wheel", {
+        deltaY: -100,
+        ctrlKey: true,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      })
+    );
+    await p.updateComplete;
+    expect(p._zoom.s).toBeGreaterThan(1);
+    expect(card._zoomScale).toBe(1);
+    const preview = card.shadowRoot.querySelector(".preview img.pimg") as HTMLElement | null;
     expect(preview?.style.transform ?? "").toBe("");
-    card._closeImageFullscreen();
-    await card.updateComplete;
-    expect(card._zoomScale).toBe(1);
-    card._openImageFullscreen();
-    await card.updateComplete;
-    expect(card._zoomScale).toBe(1);
-  });
-
-  it("fullscreen_zoom: false leaves the fullscreen image alone", async () => {
-    const card = await renderCard({ fullscreen_zoom: false });
-    card._openImageFullscreen();
-    await card.updateComplete;
-    card.dispatchEvent(wheel(-100));
-    expect(card._zoomScale).toBe(1);
   });
 });
 
-describe("BL-008: landscape full screen on a portrait screen", () => {
-  const overlay = (card: any) => card.shadowRoot.querySelector(".img-fs-overlay");
-  const fsImg = (card: any) => card.shadowRoot.querySelector(".img-fs-overlay img");
+describe("BL-008: landscape full screen on a portrait screen (a picture: the player's)", () => {
   const screenIs = (portrait: boolean) =>
     vi.stubGlobal("matchMedia", (m: string) => ({
       matches: m.includes("portrait") ? portrait : false,
       addEventListener() {},
       removeEventListener() {},
     }));
-  async function loadAs(card: any, w: number, h: number) {
-    const img = fsImg(card);
-    Object.defineProperty(img, "naturalWidth", { configurable: true, value: w });
-    Object.defineProperty(img, "naturalHeight", { configurable: true, value: h });
-    img.dispatchEvent(new Event("load"));
-    await card.updateComplete;
-  }
-  async function openTurned() {
-    screenIs(true);
-    vi.stubGlobal("DeviceMotionEvent", class {});
-    const card = await renderCard();
-    card._openImageFullscreen();
-    await card.updateComplete;
-    await loadAs(card, 400, 300);
-    return card;
-  }
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.stubGlobal("IntersectionObserver", NoopIntersectionObserver); // the file's own, kept for the card's timers
     delete (HTMLElement.prototype as any).requestFullscreen;
     delete (ShadowRoot.prototype as any).fullscreenElement;
+    delete (document as any).fullscreenElement;
     delete (document as any).exitFullscreen;
   });
 
-  it("turns a landscape picture, not a portrait one, nor on a landscape screen; and follows the phone", async () => {
+  it("asks for the real full screen on the player, turns a landscape picture (not a portrait one), and ends back in the gallery", async () => {
     screenIs(true);
     vi.stubGlobal("DeviceMotionEvent", class {});
-    const card = await renderCard();
-    card._openImageFullscreen();
-    await card.updateComplete;
-    expect(overlay(card).classList.contains("turned")).toBe(false); // until the picture says what it is
-    await loadAs(card, 400, 300);
-    expect(overlay(card).classList.contains("turned")).toBe(true);
-    expect(overlay(card).getAttribute("style")).toBe("--cgc-fs-rot:90deg");
-    const motion: any = new Event("devicemotion");
-    motion.accelerationIncludingGravity = { x: -9.4, y: 0, z: 0 }; // held with its top to the right
-    window.dispatchEvent(motion);
-    await card.updateComplete;
-    expect(overlay(card).getAttribute("style")).toBe("--cgc-fs-rot:-90deg");
-    await loadAs(card, 300, 400); // a portrait picture fits a portrait screen as it is
-    expect(overlay(card).classList.contains("turned")).toBe(false);
-    screenIs(false);
-    await loadAs(card, 400, 300);
-    expect(overlay(card).classList.contains("turned")).toBe(false); // the screen is landscape already
-    card._closeImageFullscreen();
-    await card.updateComplete;
-    expect(overlay(card)).toBeNull();
-  });
-
-  it("a turned picture pans with the finger, and zooms on the point under it", async () => {
-    const card = await openTurned();
-    const img = fsImg(card);
-    Object.defineProperty(img, "offsetWidth", { configurable: true, value: 400 });
-    Object.defineProperty(img, "offsetHeight", { configurable: true, value: 300 });
-    img.getBoundingClientRect = () =>
-      ({ left: 50, top: 250, width: 300, height: 400, right: 350, bottom: 650 }) as DOMRect;
-    // Double tap 60 px right of the centre (200, 450): in the turned picture that is 60 px towards its top.
-    card._toggleFullscreenZoom(260, 450);
-    expect(card._zoomScale).toBe(2.5);
-    expect([card._zoomPanX + 0, card._zoomPanY + 0]).toEqual([0, 90]); // the point stays under the finger
-    // A finger moving 60 px right on the screen moves the turned picture 60 px "up" in its own frame.
-    card._zoomPanX = 0;
-    card._zoomPanY = 0;
-    card._onZoomTouchStart({ touches: [{ clientX: 100, clientY: 100 }], preventDefault() {} });
-    card._onZoomTouchMove({ touches: [{ clientX: 160, clientY: 100 }], preventDefault() {} });
-    expect([card._zoomPanX + 0, card._zoomPanY + 0]).toEqual([0, -60]);
-  });
-
-  it("asks for the real full screen (no system bars), and leaves it on close", async () => {
     let inner: Element | null = null;
     const enter = (el: Element) => {
       inner = el;
     };
     const request = vi.fn(async function (this: Element) {
       enter(this);
-    });
-    const exit = vi.fn(async () => {
-      inner = null;
     });
     Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
       configurable: true,
@@ -195,12 +135,36 @@ describe("BL-008: landscape full screen on a portrait screen", () => {
         return inner && this.contains(inner) ? inner : null;
       },
     });
-    Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exit });
-    const card = await openTurned();
+    Object.defineProperty(document, "fullscreenElement", {
+      configurable: true,
+      get: () => (inner ? document.body : null),
+    });
+    const card = await renderCard();
+    card._openImageFullscreen();
+    await card.updateComplete;
+    const p = playerOf(card);
+    await p.updateComplete;
     for (let i = 0; i < 3; i++) await Promise.resolve();
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.contexts[0]).toBe(overlay(card));
-    card._closeImageFullscreen();
-    expect(exit).toHaveBeenCalledTimes(1);
+    expect(request.mock.contexts[0]).toBe(p.shadowRoot.querySelector(".nvr"));
+    document.dispatchEvent(new Event("fullscreenchange"));
+    await p.updateComplete;
+    expect(p._fullscreen).toBe(true);
+    const img = p.shadowRoot.querySelector("img.nvr-still");
+    Object.defineProperty(img, "naturalWidth", { configurable: true, value: 400 });
+    Object.defineProperty(img, "naturalHeight", { configurable: true, value: 300 });
+    img.dispatchEvent(new Event("load"));
+    await p.updateComplete;
+    expect(p._turn()).toBe(90); // landscape on a portrait screen: turned
+    Object.defineProperty(img, "naturalWidth", { configurable: true, value: 300 });
+    Object.defineProperty(img, "naturalHeight", { configurable: true, value: 400 });
+    img.dispatchEvent(new Event("load"));
+    await p.updateComplete;
+    expect(p._turn()).toBe(0); // a portrait picture fits a portrait screen as it is
+    inner = null; // left full screen
+    document.dispatchEvent(new Event("fullscreenchange"));
+    await card.updateComplete;
+    expect(card._nvr).toBeNull();
+    expect(playerOf(card)).toBeNull();
   });
 });

@@ -337,3 +337,147 @@ describe("NVR recording of the selected item (BL-008)", () => {
     ).toThrow();
   });
 });
+
+describe("owner 10-20 16:17: pictures full screen in the NVR player; the button at the bottom right", () => {
+  const fsEvent = (fullscreen: boolean, pseudo = false) =>
+    new CustomEvent("nvr-fullscreen", {
+      detail: { fullscreen, pseudo },
+      bubbles: true,
+      composed: true,
+    });
+  const player = (card: any) => q(card, ".preview cgc-nvr-player");
+
+  it("the full screen button sits at the bottom right, not in the top row, and opens a picture in the player", async () => {
+    const card = await renderCard({ thumbnail_folder: "thumbs", nvr_channel: 7 });
+    const row = [...card.shadowRoot.querySelectorAll(".gallery-pills ha-icon")].map((i: any) =>
+      i.getAttribute("icon")
+    );
+    expect(row).not.toContain("mdi:fullscreen");
+    const btn = q(card, ".pfs-btn");
+    expect(btn).not.toBeNull();
+    btn.click();
+    await card.updateComplete;
+    expect(card._nvr).toMatchObject({
+      src: DAY1[0]!.src,
+      still: DAY1[0]!.src,
+      stream: null,
+      channel: 7,
+      time: DAY1[0]!.dtMs,
+      fullscreen: true,
+      poster: side("motion_20261019_120000.gif"),
+    });
+    const p = player(card);
+    expect(p.still).toBe(DAY1[0]!.src);
+    expect(p.stream).toBeNull();
+    expect(q(card, ".pfs-btn")).toBeNull(); // the player has its own
+    p.dispatchEvent(fsEvent(false)); // full screen ends: back to the gallery
+    await card.updateComplete;
+    expect(card._nvr).toBeNull();
+    expect(player(card)).toBeNull();
+  });
+
+  it("Low / High asked for in a picture's full screen plays on when full screen ends", async () => {
+    const card = await renderCard({ nvr_channel: 7 });
+    q(card, ".pfs-btn").click();
+    await card.updateComplete;
+    const p = player(card);
+    p.dispatchEvent(
+      new CustomEvent("nvr-stream", { detail: { stream: "sub" }, bubbles: true, composed: true })
+    );
+    await card.updateComplete;
+    p.dispatchEvent(fsEvent(false));
+    await card.updateComplete;
+    expect(card._nvr).toMatchObject({ src: DAY1[0]!.src, stream: "sub" });
+    expect(player(card)).not.toBeNull();
+  });
+
+  it("an iPhone's window-covering full screen: the viewer's box stops clipping it while it lasts", async () => {
+    const card = await renderCard({ nvr_channel: 7 });
+    q(card, ".pfs-btn").click();
+    await card.updateComplete;
+    player(card).dispatchEvent(fsEvent(true, true));
+    await card.updateComplete;
+    expect(q(card, ".preview").classList.contains("pseudo-fs")).toBe(true);
+    player(card).dispatchEvent(fsEvent(false));
+    await card.updateComplete;
+    expect(q(card, ".preview").classList.contains("pseudo-fs")).toBe(false);
+  });
+
+  it("a camera without a channel (the doorbell) gets the same full screen, without Low / High", async () => {
+    const card = await renderCard({});
+    q(card, ".pfs-btn").click();
+    await card.updateComplete;
+    expect(card._nvr).toMatchObject({ still: DAY1[0]!.src, channel: null, stream: null });
+    const p = player(card);
+    await p.updateComplete;
+    expect(p._phase).toBe("still");
+    expect(p.shadowRoot.querySelector(".nvr-res")).toBeNull();
+  });
+
+  it("a video clip keeps the gallery's own full screen", async () => {
+    const card = await renderCard({});
+    card._selectedIndex = 2; // the 11:58 clip
+    await card.updateComplete;
+    q(card, ".pfs-btn").click();
+    await card.updateComplete;
+    expect(card._nvr).toBeNull();
+    expect(card._imgFsOpen).toBe(true);
+  });
+});
+
+describe("owner 10-20 16:17: auto-play all plays the day forward, as a time-lapse", () => {
+  it("from the newest it starts at the day's first; a clip plays to its end, a still 1 s, a GIF 3 s; it stops at the newest", async () => {
+    const card = await renderCard({ thumbnail_folder: "thumbs" });
+    expect(card._selectedIndex ?? 0).toBe(0); // the newest (12:00)
+    card._toggleAutoplayAll();
+    await card.updateComplete;
+    expect(card._galleryAutoplayAll).toBe(true);
+    expect(card._selectedIndex).toBe(2); // the day's first: the 11:58 clip
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(card._selectedIndex).toBe(2); // a clip waits for its end
+    card._autoplayAdvance(); // ended
+    await card.updateComplete;
+    expect(card._selectedIndex).toBe(1); // the 11:59 still
+    await vi.advanceTimersByTimeAsync(990);
+    expect(card._selectedIndex).toBe(1);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(card._selectedIndex).toBe(0); // the 12:00 GIF
+    await vi.advanceTimersByTimeAsync(2900);
+    expect(card._galleryAutoplayAll).toBe(true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card._galleryAutoplayAll).toBe(false); // nothing newer: done
+    expect(card._selectedIndex).toBe(0);
+  });
+
+  it("from an older item it plays on forward; picking another item, or the button again, stops it", async () => {
+    const card = await renderCard({ thumbnail_folder: "thumbs" });
+    card._selectedIndex = 1;
+    await card.updateComplete;
+    card._toggleAutoplayAll();
+    expect(card._selectedIndex).toBe(1); // from here
+    card._selectedIndex = 2; // the viewer taps another item
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(card._galleryAutoplayAll).toBe(false);
+    expect(card._selectedIndex).toBe(2);
+    card._toggleAutoplayAll();
+    expect(card._galleryAutoplayAll).toBe(true);
+    card._toggleAutoplayAll();
+    expect(card._galleryAutoplayAll).toBe(false);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(card._selectedIndex).toBe(2);
+  });
+
+  it("the button shows whether it plays", async () => {
+    const card = await renderCard({ thumbnail_folder: "thumbs" });
+    const btn = () =>
+      [...card.shadowRoot.querySelectorAll(".gallery-pill")].find(
+        (b: any) => b.querySelector("ha-icon")?.getAttribute("icon") === "mdi:playlist-play"
+      ) as HTMLButtonElement;
+    btn().click();
+    await card.updateComplete;
+    expect(btn().getAttribute("aria-pressed")).toBe("true");
+    btn().click();
+    await card.updateComplete;
+    expect(btn().getAttribute("aria-pressed")).toBe("false");
+  });
+});

@@ -176,6 +176,10 @@ const WF_GAIN = { low: 2.0, medium: 3.5, high: 5.5 };
 /** Hard-coded global opacity of the rendered bars (0..1). Lab-tested value
  *  that reads well over the standard talkback bar tint. */
 const WF_OPACITY = 0.35;
+// Owner fork: auto-play all as a time-lapse of the day (a still this long, a GIF this long, a clip to its end).
+const AUTOPLAY_STILL_MS = 1000;
+const AUTOPLAY_GIF_MS = 3000;
+const AUTOPLAY_CLIP_MAX_MS = 120_000; // a clip that never ends (an error, a pause): on after this
 
 /** Format a seconds count as `M:SS` (or `H:MM:SS` past an hour). Used by
  *  the gallery time-pill. NaN / negative input returns `0:00`. */
@@ -917,6 +921,7 @@ class CameraGalleryCard extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._calOutside?.stop();
+    this._stopAutoplayAll();
 
     document.removeEventListener("fullscreenchange", this._onFullscreenChange);
     document.removeEventListener("webkitfullscreenchange", this._onFullscreenChange);
@@ -1282,7 +1287,7 @@ class CameraGalleryCard extends LitElement {
       this._previewVideoEl = video;
     }
 
-    const shouldAutoplay = this.config?.autoplay === true;
+    const shouldAutoplay = this.config?.autoplay === true || this._galleryAutoplayAll;
     // Honor the runtime mute toggle from the gallery pill — `_galleryMuted`
     // is seeded from `config.auto_muted` and then overridden by user clicks.
     const shouldMute = this._galleryMuted;
@@ -2419,24 +2424,78 @@ class CameraGalleryCard extends LitElement {
     video.currentTime = pct * this._galleryDuration;
   }
 
+  /** Owner fork: auto-play all plays the day as a time-lapse, forward in time from the selected item (from the
+   * day's first when the newest is selected): a still for AUTOPLAY_STILL_MS, a GIF for AUTOPLAY_GIF_MS, a clip to
+   * its end. It stops at the newest item, on a tap of the button, or when the viewer picks something else. (Upstream
+   * only went on after a clip ended, so on a gallery of stills, the doorbell's, it did nothing.) */
   _toggleAutoplayAll() {
-    this._galleryAutoplayAll = !this._galleryAutoplayAll;
-    this.requestUpdate();
-  }
-
-  // Advance to the next clip in the current filtered list when the
-  // active video ends. Stops auto-play silently when we hit the last
-  // clip (no loop yet — feature gated until user asks for it).
-  _autoplayAdvance() {
-    const { items } = this._currentFilteredItems();
-    if (!items || items.length === 0) return;
-    const cur = this._selectedIndex ?? 0;
-    if (cur >= items.length - 1) {
-      this._galleryAutoplayAll = false;
-      this.requestUpdate();
+    if (this._galleryAutoplayAll) {
+      this._stopAutoplayAll();
       return;
     }
-    this._navNext(items.length);
+    const { items } = this._currentFilteredItems();
+    const step = this._newerStep(items);
+    if (!step) return;
+    const cur = Math.min(Math.max(this._selectedIndex ?? 0, 0), items.length - 1);
+    const from = this._inList(cur + step, items) ? cur : step < 0 ? items.length - 1 : 0;
+    this._stopNvr();
+    this._galleryAutoplayAll = true;
+    this._autoplayGo(from, items);
+  }
+
+  /** Which way along the day's list is forward in time: -1 (newest first), 1, or 0 (nothing to play). */
+  _newerStep(items) {
+    if (!items || items.length < 2) return 0;
+    const a = items[0]?.dtMs;
+    const b = items[items.length - 1]?.dtMs;
+    return Number.isFinite(a) && Number.isFinite(b) && a > b ? -1 : 1;
+  }
+
+  _inList(i, items) {
+    return Number.isInteger(i) && i >= 0 && i < items.length;
+  }
+
+  /** Show item i of the time-lapse, and step on when its time is up (a clip: when it ends). */
+  _autoplayGo(i, items) {
+    clearTimeout(this._autoplayTimer);
+    this._resetZoom();
+    this._selectedIndex = i;
+    this._pendingScrollToI = i;
+    const src = items[i].src;
+    this._autoplayAt = src;
+    this.requestUpdate();
+    const url = this._urlOf(src) || src;
+    const clip = this._isVideoSmart(url);
+    const ms = clip ? AUTOPLAY_CLIP_MAX_MS : /\.gif($|\?)/i.test(url) ? AUTOPLAY_GIF_MS : AUTOPLAY_STILL_MS;
+    this._autoplayTimer = setTimeout(() => this._autoplayAdvance(), ms);
+  }
+
+  /** The next item of the time-lapse (also when a clip ends). */
+  _autoplayAdvance() {
+    if (!this._galleryAutoplayAll) return;
+    const { items } = this._currentFilteredItems();
+    const cur = this._selectedIndex ?? 0;
+    // The viewer picked something else (a tap, a scroll, another day): stop.
+    if (!items?.length || items[cur]?.src !== this._autoplayAt) {
+      this._stopAutoplayAll();
+      return;
+    }
+    const next = cur + this._newerStep(items);
+    if (next === cur || !this._inList(next, items)) {
+      this._stopAutoplayAll();
+      return;
+    }
+    this._autoplayGo(next, items);
+  }
+
+  _stopAutoplayAll() {
+    clearTimeout(this._autoplayTimer);
+    this._autoplayTimer = 0;
+    this._autoplayAt = null;
+    if (this._galleryAutoplayAll) {
+      this._galleryAutoplayAll = false;
+      this.requestUpdate();
+    }
   }
 
   _cyclePlaybackSpeed() {
@@ -2596,7 +2655,17 @@ class CameraGalleryCard extends LitElement {
     `;
   }
 
+  /** Full screen for the selected item. A snapshot or GIF opens in the NVR player's own full screen (its still
+   * mode: the same turn, controls, zoom and swipes as a recording, and Low / High from that moment); a video clip
+   * in the gallery's full screen. */
   _openImageFullscreen() {
+    this._stopAutoplayAll();
+    const item = this._selectedItem();
+    const url = item ? this._urlOf(item.src) : "";
+    if (url && !this._isVideoSmart(url)) {
+      this._openStillFullscreen(item, url);
+      return;
+    }
     this._resetZoom();
     this._imgFsOpen = true;
     this._imgFsLandscape = false;
@@ -2632,6 +2701,41 @@ class CameraGalleryCard extends LitElement {
       };
     }
     window.addEventListener("keydown", this._onImgFsKeydown);
+    this.requestUpdate();
+  }
+
+  /** The playable URL of an item (a media-source item's resolved URL). */
+  _urlOf(src) {
+    if (!src) return "";
+    return isMediaSourceId(src) ? this._mediaClient.getUrlCache().get(src) || "" : src;
+  }
+
+  /** A snapshot or GIF full screen, in the NVR player (no stream until Low / High; none on a camera without a
+   * channel). Leaving full screen comes back here (_onNvrFullscreen). */
+  _openStillFullscreen(item, url) {
+    this._pausePreviewClip();
+    this._resetZoom();
+    this._nvr = {
+      src: item.src,
+      time: this._momentOf(item.src) ?? item.dtMs,
+      channel: this._nvrChannel(),
+      stream: null,
+      still: url,
+      addon: String(this.config?.nvr_addon || DEFAULT_NVR_ADDON),
+      poster: this._sidecarFor(item.src) || url,
+      quiet: false,
+      carried: false,
+      fullscreen: true,
+    };
+  }
+
+  /** The player went in or out of full screen. A picture's full screen ends back in the gallery (unless Low /
+   * High started its recording, which plays on here); the iPhone's window-covering full screen must not be
+   * clipped by the viewer's box. */
+  _onNvrFullscreen(e) {
+    const d = e.detail || {};
+    this._nvrPseudoFs = !!(d.fullscreen && d.pseudo);
+    if (!d.fullscreen && this._nvr?.still && !this._nvr.stream) this._stopNvr();
     this.requestUpdate();
   }
 
@@ -3581,7 +3685,7 @@ class CameraGalleryCard extends LitElement {
         return html`
           <button
             class="gallery-pill live-pill-btn ${active ? "active" : ""}"
-            title=${active ? "Stop auto-play" : "Auto-play all clips"}
+            title=${active ? "Stop auto-play" : "Play the day: stills, GIFs and clips one after another"}
             aria-pressed=${active ? "true" : "false"}
             @pointerdown=${(e) => e.stopPropagation()}
             @click=${(e) => { e.stopPropagation(); this._toggleAutoplayAll(); this._showPills(); }}
@@ -3643,6 +3747,8 @@ class CameraGalleryCard extends LitElement {
       }
 
       case "fullscreen":
+        // Owner fork: over the picture it sits at the bottom right, as in the NVR player (render, .pfs-btn).
+        if (ctx.fsCorner) return null;
         if (!(ctx.selectedHasUrl && !ctx.noResultsForFilter)) return null;
         return html`
           <button
@@ -3708,6 +3814,7 @@ class CameraGalleryCard extends LitElement {
   _startNvr(src, dtMs, stream, { quiet = false, at = null, carried = false, fullscreen = false } = {}) {
     const channel = this._nvrChannel();
     if (channel === null || !src || !Number.isFinite(dtMs)) return;
+    if (!quiet) this._stopAutoplayAll();
     if (!quiet) this._pausePreviewClip();
     const poster = this._sidecarFor(src) || (this._isVideoSmart(src) ? "" : src);
     this._nvr = {
@@ -3759,6 +3866,7 @@ class CameraGalleryCard extends LitElement {
     if (stream === "sub" || stream === "main") q.set("cgc_nvr", stream);
     if (fullscreen) q.set("cgc_fs", "1");
     const path = next.navigation_path.trim();
+    this._stopAutoplayAll();
     this._stopNvr();
     // Gone from the page (the browser leaves full screen with it; the next camera asks for it again).
     if (this._imgFsOpen) this._closeImageFullscreen({ keepFullscreen: true });
@@ -3773,7 +3881,8 @@ class CameraGalleryCard extends LitElement {
   _swipeContext() {
     const item = this._selectedItem();
     const n = this._nvr;
-    if (n && (n.carried || !n.quiet || n.revealed)) {
+    // A picture in the player (its full screen) is a snapshot still: no stream of its own.
+    if (n && !(n.still && !n.stream) && (n.carried || !n.quiet || n.revealed)) {
       const player = this.renderRoot?.querySelector(".preview cgc-nvr-player");
       const clock = player?._clock;
       return { time: Number.isFinite(clock) ? clock : n.time, stream: n.stream, fullscreen: false };
@@ -3836,6 +3945,7 @@ class CameraGalleryCard extends LitElement {
 
   _stopNvr() {
     if (this._nvr) this._nvr = null;
+    this._nvrPseudoFs = false;
   }
 
   _renderLivePillById(id) {
@@ -4116,6 +4226,7 @@ class CameraGalleryCard extends LitElement {
   _setViewMode(nextMode) {
     const mode = nextMode === "live" ? "live" : "media";
     if (mode === "live" && !this._hasLiveConfig()) return;
+    if (mode === "live") this._stopAutoplayAll();
 
     // Manual navigation away from gallery outranks the deep-link's pending
     // newest-clip selection — don't let a late item load yank the user back
@@ -6364,6 +6475,7 @@ class CameraGalleryCard extends LitElement {
       selectedIsVideo,
       selectedHasUrl,
       noResultsForFilter,
+      fsCorner: !fixedMode,
     };
     const galleryPillSettings = resolvePillSettings(
       GALLERY_PILL_CATALOG,
@@ -6479,6 +6591,14 @@ class CameraGalleryCard extends LitElement {
 
     // BL-008: the NVR player belongs to the item it was started on; browsing away (or going live) closes it.
     const nvrOn = !!this._nvr && !isLive && this._nvr.src === selected;
+    // Owner fork: the full screen button at the bottom right of the picture, as in the NVR player.
+    const fsCornerOn =
+      !isLive &&
+      !fixedMode &&
+      !nvrOn &&
+      selectedHasUrl &&
+      !noResultsForFilter &&
+      galleryPillSettings.get("fullscreen")?.enabled !== false;
     if (this._nvr && !nvrOn) {
       // Only that stream: a swipe's arrival may have started another one by then (a day switch renders between).
       const stale = this._nvr;
@@ -6490,7 +6610,7 @@ class CameraGalleryCard extends LitElement {
     const previewBlock = showPreviewSection
       ? html`
           <div
-            class="preview"
+            class="preview ${this._nvrPseudoFs ? "pseudo-fs" : ""}"
             style="aspect-ratio:${this._getPreviewAspectRatio(isLive)}; touch-action:${isLive ? "auto" : "pan-y"};${!isLive && this.config?.gallery_fit ? ` --cgc-object-fit:${this._galleryFit()};` : ""}"
             @pointerdown=${(e) => {
               if (e?.isPrimary === false) return;
@@ -6558,16 +6678,21 @@ class CameraGalleryCard extends LitElement {
                   .poster=${this._nvr.poster}
                   .quiet=${!!this._nvr.quiet}
                   .fullscreen=${!!this._nvr.fullscreen}
+                  .still=${this._nvr.still || ""}
                   .label=${this._cameraLabel()}
                   @nvr-close=${() => this._stopNvr()}
+                  @nvr-fullscreen=${(e) => this._onNvrFullscreen(e)}
                   @nvr-reveal=${() => {
                     if (this._nvr) this._nvr.revealed = true;
                     this._pausePreviewClip();
                   }}
                   @nvr-swipe=${(e) => {
                     const d = e.detail || {};
-                    if (this._goToCamera(d.dir, { time: d.time, stream: d.stream, fullscreen: d.fullscreen }))
-                      e.preventDefault();
+                    // A picture's full screen: the moment and any stream passed on are the gallery's (a doorbell
+                    // snapshot swiped to while streaming streams on from the next camera).
+                    const pic = this._nvr?.still && !this._nvr.stream ? this._swipeContext() : null;
+                    const to = pic ? { time: pic.time, stream: pic.stream } : { time: d.time, stream: d.stream };
+                    if (this._goToCamera(d.dir, { ...to, fullscreen: d.fullscreen })) e.preventDefault();
                   }}
                   @nvr-stream=${(e) => {
                     if (this._nvr) this._nvr = { ...this._nvr, stream: e.detail.stream, quiet: false };
@@ -6606,6 +6731,21 @@ class CameraGalleryCard extends LitElement {
                 ${galleryPillsRow}
               </div>
             ` : html``}
+            ${fsCornerOn ? html`
+              <button
+                class="pfs-btn ${this._pillsVisible || this.config?.persistent_controls ? "visible" : ""}"
+                title="Full screen"
+                aria-label="Full screen"
+                @pointerdown=${(e) => e.stopPropagation()}
+                @pointerup=${(e) => e.stopPropagation()}
+                @click=${(e) => {
+                  e.stopPropagation();
+                  this._openImageFullscreen();
+                }}
+              >
+                <ha-icon icon="mdi:fullscreen"></ha-icon>
+              </button>
+            ` : html``}
             ${!isLive && selectedIsVideo && selectedHasUrl && !noResultsForFilter ? (() => {
               const dur = this._galleryDuration || 0;
               const pct = dur > 0 ? Math.max(0, Math.min(100, (this._galleryCurrentTime / dur) * 100)) : 0;
@@ -6629,7 +6769,7 @@ class CameraGalleryCard extends LitElement {
                   <ha-icon icon=${this._galleryPlaying ? "mdi:pause" : "mdi:play"}></ha-icon>
                 </button>
                 ${timeEnabled ? html`
-                  <div class="vid-time ${visible ? "visible" : ""}">
+                  <div class="vid-time ${visible ? "visible" : ""} ${fsCornerOn ? "with-fs" : ""}">
                     <span>${cur} / ${durStr}</span>
                   </div>
                 ` : html``}

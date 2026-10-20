@@ -1175,3 +1175,135 @@ describe("<cgc-nvr-player>", () => {
     });
   });
 });
+
+describe("a snapshot or GIF: the player's still mode (owner 10-20 16:17)", () => {
+  const q = (el: any, sel: string) => el.shadowRoot.querySelector(sel);
+  const ptr = (type: string, id: number, x: number, y: number): any => {
+    const e: any = new MouseEvent(type, {
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      button: 0,
+    });
+    Object.defineProperty(e, "pointerId", { value: id });
+    Object.defineProperty(e, "pointerType", { value: "touch" });
+    return e;
+  };
+  let nextId = 500;
+  async function tapAt(el: any, x: number, y: number, wait = 350) {
+    const id = nextId++;
+    q(el, ".nvr-tap").dispatchEvent(ptr("pointerdown", id, x, y));
+    q(el, ".nvr-tap").dispatchEvent(ptr("pointerup", id, x, y));
+    if (wait) await vi.advanceTimersByTimeAsync(wait);
+    await el.updateComplete;
+  }
+  const layout = (el: any) => {
+    q(el, ".nvr-stage").getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 400, height: 225, right: 400, bottom: 225 }) as DOMRect;
+  };
+  const STILL = "/local/snapshots/cam/motion_20261019_120000.gif";
+
+  it("shows the picture with the player's own controls, and asks the NVR for nothing until Low / High", async () => {
+    const calls = installFetch(happyRoute());
+    const el = await mount({ still: STILL, stream: null });
+    expect(el._phase).toBe("still");
+    expect(q(el, "img.nvr-still").getAttribute("src")).toBe(STILL);
+    expect(q(el, "video").hasAttribute("hidden")).toBe(true);
+    expect(q(el, ".nvr-wait")).toBeNull();
+    expect(plays(calls)).toEqual([]);
+    const res = [...el.shadowRoot.querySelectorAll(".nvr-res button")] as HTMLButtonElement[];
+    expect(res.map((b) => [b.textContent!.trim(), b.classList.contains("on")])).toEqual([
+      ["Low", false],
+      ["High", false],
+    ]);
+    expect(q(el, ".nvr-close")).not.toBeNull();
+    expect(q(el, ".nvr-ctl-min .nvr-fs")).not.toBeNull(); // full screen at the bottom right
+    const streams: string[] = [];
+    el.addEventListener("nvr-stream", (e: any) => streams.push(e.detail.stream));
+    res[1]!.click(); // High: the recording from the picture's moment, in this same viewer
+    await flush();
+    await el.updateComplete;
+    expect(streams).toEqual(["main"]);
+    expect(plays(calls)).toEqual([{ channel: 7, stream: "main", time: T, client: el._client }]);
+    expect(el._phase).not.toBe("still");
+    expect(q(el, "img.nvr-still")).toBeNull();
+    el.stream = "main"; // the host follows nvr-stream
+    await el.updateComplete;
+    await flush();
+    expect(plays(calls)).toHaveLength(1); // no second start
+  });
+
+  it("a camera without recordings (the doorbell): its picture and close, no Low / High", async () => {
+    installFetch(happyRoute());
+    const el = await mount({ still: STILL, stream: null, channel: null });
+    expect(el._phase).toBe("still");
+    expect(q(el, ".nvr-res")).toBeNull();
+    expect(q(el, ".nvr-close")).not.toBeNull();
+  });
+
+  it("controls hide like a playing video's and a tap brings them back; a double tap zooms the picture", async () => {
+    installFetch(happyRoute());
+    const el = await mount({ still: STILL, stream: null });
+    layout(el);
+    q(el, "img.nvr-still").dispatchEvent(new Event("load"));
+    await el.updateComplete;
+    expect(q(el, ".nvr-ui").classList.contains("shown")).toBe(true);
+    await vi.advanceTimersByTimeAsync(1900);
+    await el.updateComplete;
+    expect(q(el, ".nvr-ui").classList.contains("shown")).toBe(false);
+    await tapAt(el, 200, 110); // one tap: the controls
+    expect(q(el, ".nvr-ui").classList.contains("shown")).toBe(true);
+    await tapAt(el, 300, 60, 100);
+    await tapAt(el, 300, 60, 0); // a double tap: zoom in on that point
+    expect(el._zoom.s).toBe(2.5);
+    expect(q(el, ".nvr").classList.contains("zoomed")).toBe(true);
+    await vi.advanceTimersByTimeAsync(400);
+    await tapAt(el, 300, 60, 100);
+    await tapAt(el, 300, 60, 0); // again: the whole picture
+    expect(el._zoom.s).toBe(1);
+  });
+
+  it("a swipe carries the picture's moment and no stream", async () => {
+    installFetch(happyRoute());
+    const el = await mount({ still: STILL, stream: null, fullscreen: false });
+    const seen: any[] = [];
+    el.addEventListener("nvr-swipe", (e: any) => seen.push(e.detail));
+    el._swipe(1);
+    expect(seen).toEqual([{ dir: 1, time: T, stream: null, fullscreen: false }]);
+  });
+
+  it("a portrait picture stands as it is: no turn in full screen", async () => {
+    installFetch(happyRoute());
+    const el = await mount({ still: STILL, stream: null });
+    const img = q(el, "img.nvr-still");
+    Object.defineProperty(img, "naturalWidth", { value: 713 });
+    Object.defineProperty(img, "naturalHeight", { value: 1280 });
+    img.dispatchEvent(new Event("load"));
+    await el.updateComplete;
+    expect(el._portraitContent()).toBe(true);
+    expect(q(el, ".nvr").classList.contains("portrait")).toBe(true);
+    el._fullscreen = true;
+    expect(el._turn()).toBe(0);
+  });
+
+  it("without element full screen (an iPhone) it covers the window, and tells the host", async () => {
+    installFetch(happyRoute());
+    const events: any[] = [];
+    document.addEventListener("nvr-fullscreen", (e: any) => events.push(e.detail));
+    const el = await mount({ still: STILL, stream: null, fullscreen: true });
+    await flush();
+    await el.updateComplete;
+    expect(events).toEqual([{ fullscreen: true, pseudo: true }]);
+    expect(q(el, ".nvr").classList.contains("fs")).toBe(true);
+    expect(q(el, ".nvr").classList.contains("pseudo")).toBe(true);
+    expect(el.hasAttribute("pseudo")).toBe(true);
+    q(el, ".nvr-fs").click(); // the bottom-right button leaves it
+    await flush();
+    await el.updateComplete;
+    expect(events[events.length - 1]).toEqual({ fullscreen: false, pseudo: false });
+    expect(q(el, ".nvr").classList.contains("pseudo")).toBe(false);
+    expect(el.hasAttribute("pseudo")).toBe(false);
+  });
+});

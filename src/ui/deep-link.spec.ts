@@ -439,25 +439,24 @@ describe("swiping between cameras (owner fork)", () => {
     delete (HTMLElement.prototype as any).setPointerCapture;
   });
 
-  it("a swipe in the image full screen opens the next camera's closest snapshot, full screen too", async () => {
+  // Owner 10-20 16:17: a snapshot's full screen is the NVR player's (its still mode); its swipes are the player's.
+  const playerOf = (card: any) => card.shadowRoot.querySelector(".preview cgc-nvr-player");
+  const swipeEv = (detail: Record<string, unknown>) =>
+    new CustomEvent("nvr-swipe", { detail, bubbles: true, composed: true, cancelable: true });
+
+  it("a swipe in a snapshot's full screen opens the next camera's closest snapshot, full screen too", async () => {
     link({ cgc_id: "front_right", cgc_view: "gallery", cgc_src: ITEMS[1]!.src });
     const card = makeCard({ swipe_cameras: CAMERAS });
     await show(card);
     card._openImageFullscreen();
     await card.updateComplete;
-    const t = (x: number, y: number) => [{ clientX: x, clientY: y }];
-    // Up or down, or short: nothing (gestures apart: two touches within 300 ms are a double-tap zoom).
-    card._onZoomTouchStart({ touches: t(200, 300), preventDefault() {} });
-    card._onZoomTouchEnd({ touches: [], changedTouches: t(210, 500) });
-    await vi.advanceTimersByTimeAsync(400);
-    card._onZoomTouchStart({ touches: t(200, 300), preventDefault() {} });
-    card._onZoomTouchEnd({ touches: [], changedTouches: t(170, 300) });
-    await vi.advanceTimersByTimeAsync(400);
-    expect(moves).toEqual([]);
-    expect(card._zoomScale).toBe(1);
+    const p = playerOf(card);
+    expect(p.still).toBe(ITEMS[1]!.src);
+    expect(card._imgFsOpen).toBe(false);
     // To the right: the previous camera (round to the last), its snapshot full screen.
-    card._onZoomTouchStart({ touches: t(100, 300), preventDefault() {} });
-    card._onZoomTouchEnd({ touches: [], changedTouches: t(300, 310) });
+    const ev = swipeEv({ dir: -1, time: ITEMS[1]!.dtMs, stream: null, fullscreen: true });
+    p.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
     expect(query(moves[0]!.url)).toEqual({
       cgc_id: "left_front",
       cgc_view: "gallery",
@@ -465,19 +464,30 @@ describe("swiping between cameras (owner fork)", () => {
       cgc_near: "1",
       cgc_fs: "1",
     });
-    expect(card._imgFsOpen).toBe(false);
+    expect(card._nvr).toBeNull();
   });
 
-  it("a turned full-screen picture swipes along itself", async () => {
+  it("a turned full-screen snapshot swipes along itself (the player's own reading)", async () => {
     link({ cgc_id: "front_right", cgc_view: "gallery", cgc_src: ITEMS[1]!.src });
     const card = makeCard({ swipe_cameras: CAMERAS });
     await show(card);
     card._openImageFullscreen();
     await card.updateComplete;
-    vi.spyOn(card, "_imgFsTurn").mockReturnValue(90);
+    const p = playerOf(card);
+    await vi.advanceTimersByTimeAsync(0); // its full screen is on (here the window-covering one)
+    expect(p._fullscreen).toBe(true);
+    p._turn = () => 90;
+    const tev = (type: string, x: number, y: number): any => {
+      const e: any = new Event(type, { bubbles: true, composed: true, cancelable: true });
+      const t = { clientX: x, clientY: y };
+      Object.defineProperty(e, "touches", { value: type === "touchend" ? [] : [t] });
+      Object.defineProperty(e, "changedTouches", { value: [t] });
+      return e;
+    };
     // Turned 90 degrees: up the screen is the picture's left, so a finger moving up is a swipe to the left.
-    card._onZoomTouchStart({ touches: [{ clientX: 200, clientY: 600 }], preventDefault() {} });
-    card._onZoomTouchEnd({ touches: [], changedTouches: [{ clientX: 205, clientY: 350 }] });
+    const nvr = p.shadowRoot.querySelector(".nvr");
+    nvr.dispatchEvent(tev("touchstart", 200, 600));
+    nvr.dispatchEvent(tev("touchend", 205, 350));
     expect(query(moves[0]!.url)).toMatchObject({ cgc_id: "camera1", cgc_fs: "1" });
   });
 
@@ -492,8 +502,13 @@ describe("swiping between cameras (owner fork)", () => {
     const card = makeCard({ swipe_cameras: CAMERAS, nvr_channel: 7 });
     await show(card);
     expect(card._selectedIndex).toBe(1);
-    expect(card._imgFsOpen).toBe(true);
-    expect(card._nvr).toBeNull();
+    // Its snapshot in the player's full screen (no stream: Low / High there would start one).
+    expect(card._nvr).toMatchObject({
+      src: ITEMS[1]!.src,
+      still: ITEMS[1]!.src,
+      stream: null,
+      fullscreen: true,
+    });
 
     link({
       cgc_id: "doorbell",
@@ -505,11 +520,12 @@ describe("swiping between cameras (owner fork)", () => {
     });
     const door = makeCard({ swipe_cameras: CAMERAS, url_id: "doorbell" });
     await show(door);
-    expect(door._imgFsOpen).toBe(true);
+    expect(door._nvr).toMatchObject({ still: expect.any(String), channel: null, stream: null });
     expect(door._carry).toMatchObject({ stream: "main", time: at(19, 13, 20) });
-    // Swiping on from its full-screen snapshot: the next camera streams again, full screen.
-    door._onZoomTouchStart({ touches: [{ clientX: 300, clientY: 300 }], preventDefault() {} });
-    door._onZoomTouchEnd({ touches: [], changedTouches: [{ clientX: 100, clientY: 305 }] });
+    // Swiping on from its full-screen snapshot (the player's swipe): the next camera streams again, full screen.
+    playerOf(door).dispatchEvent(
+      swipeEv({ dir: 1, time: door._nvr.time, stream: null, fullscreen: true })
+    );
     expect(query(moves[0]!.url)).toMatchObject({
       cgc_id: "left_front",
       cgc_nvr: "main",
@@ -645,8 +661,9 @@ describe("owner 10-20 13:08: touch swipes, no arrows or count, portrait cameras,
     expect(card.shadowRoot.querySelector(".preview").textContent).not.toMatch(/\d+\s*\/\s*\d+/);
     card._openImageFullscreen();
     await card.updateComplete;
-    expect(card.shadowRoot.querySelector(".img-fs-overlay")).not.toBeNull();
-    expect(card.shadowRoot.querySelector(".img-fs-overlay .pnavbtn")).toBeNull();
+    expect(card._nvr?.still).toBeTruthy(); // the player's full screen: no arrows there either
+    expect(card.shadowRoot.querySelector(".img-fs-overlay")).toBeNull();
+    expect(card.shadowRoot.querySelector(".pnavbtn")).toBeNull();
   });
 
   it("a portrait camera: a 3:4 gallery picture shown whole; live keeps its box and fit", async () => {

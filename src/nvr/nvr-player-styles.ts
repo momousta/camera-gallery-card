@@ -15,6 +15,11 @@ export const nvrPlayerStyles = css`
     --nvr-bar-h: 40px;
     transition: opacity 0.15s;
   }
+  /* The window-covering full screen (an iPhone): above the page, unclipped. */
+  :host([pseudo]) {
+    z-index: 2147483000;
+    overflow: visible;
+  }
   /* A quiet start loads unseen (the host's picture stays visible) until the video plays. */
   :host([quiet]:not([revealed])) {
     opacity: 0;
@@ -31,6 +36,12 @@ export const nvrPlayerStyles = css`
   }
   .nvr.fs {
     background: #000;
+  }
+  /* Full screen where the browser has no element full screen (an iPhone): the player covers the window. */
+  .nvr.fs.pseudo {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483000;
   }
   /* Full screen on a portrait screen (an app's WebView can't turn the screen): turn the picture, so it is
      landscape with the phone held sideways. A landscape screen (turned by Chrome, or by the phone) needs nothing. */
@@ -57,6 +68,16 @@ export const nvrPlayerStyles = css`
   }
   /* A camera on its side (the add-on's turn for its channel): the video's box is the stage's, swapped, and its
      transform (render) centres and turns it, so it stands upright and fills the stage. */
+  .nvr-video[hidden] {
+    display: none;
+  }
+  /* A snapshot or GIF (the gallery's full screen for pictures): drawn like the video; the taps go to .nvr-tap. */
+  .nvr-still {
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+  }
   .nvr-video.quarter {
     inset: auto;
     left: 50%;
