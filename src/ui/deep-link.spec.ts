@@ -680,3 +680,84 @@ describe("owner 10-20 13:08: touch swipes, no arrows or count, portrait cameras,
     expect(card.shadowRoot.querySelector(".cal-picker")).toBeNull();
   });
 });
+
+describe("owner 10-20 14:29: the moment a link came for (the timeline opens camera pages)", () => {
+  const CAMS = [
+    {
+      name: "Front Right",
+      navigation_path: "/main-dashboard/front-right",
+      gallery_id: "front_right",
+    },
+    { name: "Front", navigation_path: "/main-dashboard/camera1", gallery_id: "camera1" },
+  ];
+  const nvrPill = (card: any, label: string) =>
+    [...card.shadowRoot.querySelectorAll(".nvr-pill")].find(
+      (b: any) => b.textContent.trim() === label
+    ) as HTMLButtonElement;
+  let moves: string[] = [];
+  const onMove = () => moves.push(window.location.pathname + window.location.search);
+  beforeEach(() => {
+    moves = [];
+    window.addEventListener("location-changed", onMove);
+    // No add-on here: a started player stays loading.
+    vi.spyOn(customElements.get("cgc-nvr-player")!.prototype as any, "_go").mockReturnValue(
+      new Promise(() => {})
+    );
+  });
+  afterEach(() => window.removeEventListener("location-changed", onMove));
+
+  it("on the linked file, Low / High play from the link's moment and a swipe carries it on", async () => {
+    // The timeline at 12:52: Front Right's frame at or before it is 12:45.
+    link({
+      cgc_id: "front_right",
+      cgc_view: "gallery",
+      cgc_src: ITEMS[1]!.src,
+      cgc_time: String(at(19, 12, 52)),
+    });
+    const card = makeCard({ swipe_cameras: CAMS, nvr_channel: 7 });
+    await show(card);
+    expect(card._viewMode).toBe("media");
+    expect(card._selectedIndex).toBe(1);
+    expect(card._nvr).toBeNull(); // no stream until asked for
+    nvrPill(card, "High").click();
+    await card.updateComplete;
+    expect(card._nvr).toMatchObject({ src: ITEMS[1]!.src, time: at(19, 12, 52), stream: "main" });
+    card._stopNvr();
+    await card.updateComplete;
+    expect(card._swipeContext()).toEqual({ time: at(19, 12, 52), stream: null, fullscreen: false });
+    card._goToCamera(1, card._swipeContext());
+    expect(moves).toHaveLength(1);
+    expect(Object.fromEntries(new URL(moves[0]!, "http://x").searchParams)).toMatchObject({
+      cgc_id: "camera1",
+      cgc_time: String(at(19, 12, 52)),
+      cgc_near: "1",
+    });
+  });
+
+  it("another item plays from its own moment", async () => {
+    link({
+      cgc_id: "front_right",
+      cgc_view: "gallery",
+      cgc_src: ITEMS[1]!.src,
+      cgc_time: String(at(19, 12, 52)),
+    });
+    const card = makeCard({ swipe_cameras: CAMS, nvr_channel: 7 });
+    await show(card);
+    card._selectedIndex = 0;
+    await card.updateComplete;
+    expect(card._swipeContext().time).toBe(ITEMS[0]!.dtMs);
+    nvrPill(card, "Low").click();
+    await card.updateComplete;
+    expect(card._nvr).toMatchObject({ src: ITEMS[0]!.src, time: ITEMS[0]!.dtMs, stream: "sub" });
+  });
+
+  it("a link without a moment leaves the item's own", async () => {
+    link({ cgc_id: "front_right", cgc_view: "gallery", cgc_src: ITEMS[1]!.src });
+    const card = makeCard({ swipe_cameras: CAMS, nvr_channel: 7 });
+    await show(card);
+    expect(card._moment).toBeNull();
+    nvrPill(card, "Low").click();
+    await card.updateComplete;
+    expect(card._nvr).toMatchObject({ src: ITEMS[1]!.src, time: ITEMS[1]!.dtMs });
+  });
+});

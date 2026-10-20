@@ -3,11 +3,11 @@
  *
  * One shared moment drives a grid of cameras: each tile shows that camera's frame at or just before the moment
  * (its small preview, BL-006), with how old it is. Drag or flick the time track under the centre playhead, or
- * play it forward; pausing holds every camera on that moment. Tap a camera for its full clip.
+ * play it forward; pausing holds every camera on that moment.
  *
- * In a camera's full view, a swipe goes to the next / previous camera at the same moment: its closest frame, or,
- * while the NVR recording plays, that camera's recording from the moment on screen in the same quality (a camera
- * without `nvr_channel` shows its frame and passes the stream on to the next swipe).
+ * Tap a camera to open its page (its gallery card: the one viewer for snapshots, GIFs, clips and NVR recordings)
+ * on the frame shown, at the moment on the track: Low / High there play from that moment, and a swipe goes on to
+ * the next camera at the same moment. Back returns here, on the same moment.
  *
  * Config:
  *   type: custom:camera-timeline-card
@@ -17,20 +17,15 @@
  *   cameras:                                  # FileTrack-style sensors with a `fileList` attribute
  *     - entity: sensor.filetrack_front_right
  *       name: Front Right
- *       navigation_path: /main-dashboard/front-right   # "Open camera" in the full view (optional)
+ *       navigation_path: /main-dashboard/front-right   # the camera's page, opened by a tap on its tile
  *       gallery_id: front_right                         # that page's gallery card `url_id`: open it on this
  *                                                       # exact file (cgc_src) and moment (cgc_time)
- *       nvr_channel: 7                                  # BL-008: Low / High in the full view play the NVR's
- *                                                       # recording from the moment on the track
- *   nvr_addon: local_nvr_playback             # the NVR Playback add-on's slug (default)
  */
 
 import { LitElement, html } from "lit";
 import { guard } from "lit/directives/guard.js";
 
 import { monthOf } from "../data/calendar";
-import { DEFAULT_NVR_ADDON, NVR_STREAM_LABEL, NVR_STREAMS, nvrChannelOf } from "../nvr/nvr-api";
-import "../nvr/nvr-player.js";
 import { ThumbPreloader } from "../data/preload";
 import { sidecarFolder, sidecarUrl } from "../data/sidecar";
 import { OutsidePress, renderCalendarPicker } from "../ui/calendar-picker";
@@ -64,19 +59,6 @@ const REPLAN_MS = 45 * 60_000;
 const PRELOAD_CONCURRENCY = 4;
 const VIDEO_RE = /\.(mp4|webm|mov|m4v)$/i;
 
-/** The item closest in time to `t` (the earlier of two equally close), or null. */
-function closestItem(items, t) {
-  let best = null;
-  let gap = Infinity;
-  for (const it of items) {
-    const g = Math.abs(it.ms - t);
-    if (g < gap) {
-      gap = g;
-      best = it;
-    }
-  }
-  return best;
-}
 const KIND_ICON = {
   person: "mdi:walk",
   car: "mdi:car",
@@ -93,7 +75,6 @@ export class CameraTimelineCard extends LitElement {
       _zoom: { state: true },
       _playing: { state: true },
       _speedIdx: { state: true },
-      _overlay: { state: true },
       _calOpen: { state: true },
       _calMonth: { state: true },
       _half: { state: true },
@@ -117,7 +98,6 @@ export class CameraTimelineCard extends LitElement {
     this._zoom = DEFAULT_ZOOM_INDEX;
     this._playing = false;
     this._speedIdx = 0;
-    this._overlay = null;
     this._calOpen = false;
     this._calMonth = "";
     // A press anywhere outside the open calendar closes it.
@@ -159,7 +139,6 @@ export class CameraTimelineCard extends LitElement {
     this.config = {
       thumbnail_folder: "",
       preload: true,
-      nvr_addon: DEFAULT_NVR_ADDON,
       ...config,
       cameras: cams,
     };
@@ -486,71 +465,32 @@ export class CameraTimelineCard extends LitElement {
     this.requestUpdate();
   }
 
-  // ── navigation and the full view ────────────────────────────────────
+  // ── opening a camera ────────────────────────────────────────────────
 
-  /** "Open camera": the camera's page, opened on this exact file and moment when its gallery has a `url_id`. */
-  _openCamera(cam, item) {
-    let path = cam?.navigation_path;
-    if (!path) return;
+  /** A tap on a camera: its page, on the frame shown (`cgc_src`, when its gallery has a `url_id`) at the moment on
+   * the track (`cgc_time`: where Low / High start and what a swipe carries on). Returns whether it went. */
+  _openCamera(cam, item, t) {
+    let path = typeof cam?.navigation_path === "string" ? cam.navigation_path.trim() : "";
+    if (!path) return false;
     const id = typeof cam.gallery_id === "string" ? cam.gallery_id.trim() : "";
     if (id && item) {
       const q = new URLSearchParams({
         cgc_id: id,
         cgc_view: "gallery",
         cgc_src: item.src,
-        cgc_time: String(item.ms),
+        cgc_time: String(Math.round(Number.isFinite(t) ? Math.max(t, item.ms) : item.ms)),
       });
       path += (path.includes("?") ? "&" : "?") + q.toString();
     }
-    this._overlay = null;
     this._navigate(path);
+    return true;
   }
 
-  /** The full view's next (1) / previous (-1) camera with a frame that day, at the moment `time` (default: the
-   * view's); `stream` carries on streaming where the camera has an NVR channel. Returns whether it moved. */
-  _overlaySwipe(dir, { time, stream } = {}) {
-    const o = this._overlay;
-    const cams = this.config?.cameras ?? [];
-    if (!o || cams.length < 2) return false;
-    const t = Number.isFinite(time) ? time : o.t;
-    const keep = stream ?? o.nvr ?? o.carry ?? null;
-    for (let step = 1; step < cams.length; step++) {
-      const ci = (((o.ci + dir * step) % cams.length) + cams.length) % cams.length;
-      const item = closestItem(this._tracks[ci] ?? [], t);
-      if (!item) continue;
-      const nvr = keep && nvrChannelOf(cams[ci]?.nvr_channel) !== null ? keep : null;
-      this._overlay = { ci, item, t, nvr, carry: keep && !nvr ? keep : null };
-      return true;
-    }
-    return false;
-  }
-
-  /** A horizontal swipe on the full view's picture (not on a video's own controls, at its bottom). */
-  _mediaDown(e) {
-    if (e.isPrimary === false) return;
-    const r = e.currentTarget.getBoundingClientRect?.();
-    if (
-      e.currentTarget.tagName === "VIDEO" &&
-      r &&
-      e.clientY > r.bottom - Math.max(48, r.height * 0.25)
-    )
-      return;
-    this._mediaSwipe = { x: e.clientX, y: e.clientY, t: performance.now() };
-  }
-
-  _mediaUp(e) {
-    const g = this._mediaSwipe;
-    this._mediaSwipe = null;
-    if (!g) return;
-    const dx = e.clientX - g.x;
-    const dy = e.clientY - g.y;
-    if (Math.abs(dx) >= 50 && Math.abs(dx) > 1.5 * Math.abs(dy) && performance.now() - g.t < 900)
-      this._overlaySwipe(dx < 0 ? 1 : -1);
-  }
-
+  /** As Home Assistant's own navigate: the new entry remembers the page it came `from`, which HA's back arrow
+   * needs to go back here (without it, the arrow goes to the dashboard's first view). */
   _navigate(path) {
     if (!path) return;
-    window.history.pushState(null, "", path);
+    window.history.pushState({ from: window.location.pathname }, "", path);
     window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
   }
 
@@ -673,7 +613,6 @@ export class CameraTimelineCard extends LitElement {
             </div>
           </div>
         </div>
-        ${this._overlay ? this._renderOverlay() : ""}
         ${this._calOpen
           ? renderCalendarPicker({
               days: this._days,
@@ -712,11 +651,10 @@ export class CameraTimelineCard extends LitElement {
     const icon = KIND_ICON[item.kind];
     return html`<button
       class="tl-tile ${stale ? "stale" : ""}"
-      title=${name}
+      title=${cam.navigation_path ? `Open ${name}` : name}
       @click=${() => {
         this._pause();
-        // t: the moment on the track, where NVR playback starts (BL-008).
-        this._overlay = { ci, item, t, nvr: null };
+        this._openCamera(cam, item, t);
       }}
     >
       ${url
@@ -737,97 +675,6 @@ export class CameraTimelineCard extends LitElement {
         ${icon ? html`<ha-icon class="tl-kind" icon=${icon}></ha-icon>` : ""}
       </div>
     </button>`;
-  }
-
-  _renderOverlay() {
-    const { ci, item, t, nvr } = this._overlay;
-    const cam = this.config.cameras[ci];
-    const preview = this._previewFor(item.src);
-    const close = () => (this._overlay = null);
-    const locale = this._hass?.locale;
-    const channel = nvrChannelOf(cam?.nvr_channel);
-    const setNvr = (stream) => (this._overlay = { ...this._overlay, nvr: stream });
-    return html`
-      <div class="tl-overlay-backdrop" @click=${close}></div>
-      <div class="tl-overlay" role="dialog" aria-label=${cam?.name || cam?.entity || ""}>
-        <div class="tl-overlay-head">
-          <span
-            >${cam?.name || cam?.entity} ·
-            ${nvr
-              ? `NVR from ${formatTimeFromMs(t, locale)}`
-              : formatTimeFromMs(item.ms, locale)}</span
-          >
-          <span class="tl-overlay-actions">
-            ${channel !== null
-              ? NVR_STREAMS.map(
-                  (s) =>
-                    html`<button
-                      class="tl-btn ${nvr === s ? "on" : ""}"
-                      title=${nvr === s
-                        ? "Back to the snapshot"
-                        : s === "sub"
-                          ? "Play the NVR recording from this moment (low resolution, starts fast)"
-                          : "Play the NVR recording from this moment (high resolution, slower to start)"}
-                      aria-pressed=${nvr === s ? "true" : "false"}
-                      @click=${() => setNvr(nvr === s ? null : s)}
-                    >
-                      <ha-icon icon="mdi:filmstrip-box"></ha-icon>${NVR_STREAM_LABEL[s]}
-                    </button>`
-                )
-              : ""}
-            ${cam?.navigation_path
-              ? html`<button class="tl-btn" @click=${() => this._openCamera(cam, item)}>
-                  <ha-icon icon="mdi:cctv"></ha-icon>Open camera
-                </button>`
-              : ""}
-            <button class="tl-btn icon" @click=${close} title="Close" aria-label="Close">
-              <ha-icon icon="mdi:close"></ha-icon>
-            </button>
-          </span>
-        </div>
-        ${nvr && channel !== null
-          ? html`<div class="tl-overlay-nvr">
-              <cgc-nvr-player
-                .hass=${this._hass}
-                .channel=${channel}
-                .time=${Number.isFinite(t) ? t : item.ms}
-                .stream=${nvr}
-                .addon=${this.config.nvr_addon || DEFAULT_NVR_ADDON}
-                .poster=${preview}
-                .bare=${true}
-                .label=${cam?.name || ""}
-                @nvr-close=${() => setNvr(null)}
-                @nvr-stream=${(e) => setNvr(e.detail.stream)}
-                @nvr-swipe=${(e) => {
-                  if (this._overlaySwipe(e.detail.dir, e.detail)) e.preventDefault();
-                }}
-              ></cgc-nvr-player>
-            </div>`
-          : VIDEO_RE.test(item.src)
-            ? html`<video
-                class="tl-overlay-media"
-                @pointerdown=${(e) => this._mediaDown(e)}
-                @pointerup=${(e) => this._mediaUp(e)}
-                @pointercancel=${() => (this._mediaSwipe = null)}
-                src=${item.src}
-                poster=${preview}
-                controls
-                autoplay
-                muted
-                playsinline
-              ></video>`
-            : html`<img
-                class="tl-overlay-media"
-                draggable="false"
-                @pointerdown=${(e) => this._mediaDown(e)}
-                @pointerup=${(e) => this._mediaUp(e)}
-                @pointercancel=${() => (this._mediaSwipe = null)}
-                src=${item.src}
-                alt=""
-                style=${preview ? `background-image:url("${preview}")` : ""}
-              />`}
-      </div>
-    `;
   }
 
   updated() {

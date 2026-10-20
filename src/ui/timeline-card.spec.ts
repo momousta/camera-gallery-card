@@ -225,57 +225,67 @@ describe("days", () => {
   });
 });
 
-describe("the full view of one camera", () => {
-  it("tapping a camera shows its full file over the preview and can open the camera page", async () => {
+describe("opening a camera: its own page, the one viewer (owner 10-20)", () => {
+  let moves: { url: string; replace: boolean }[] = [];
+  const onMove = (e: Event) =>
+    moves.push({
+      url: window.location.pathname + window.location.search,
+      replace: !!(e as CustomEvent).detail?.replace,
+    });
+  beforeEach(() => {
+    moves = [];
+    window.history.replaceState(null, "", "/main-dashboard/timeline");
+    window.addEventListener("location-changed", onMove);
+  });
+  afterEach(() => window.removeEventListener("location-changed", onMove));
+
+  it("a tap opens the camera's page on the frame shown, at the moment on the track", async () => {
     const card = await render();
     card._setT(at(12, 50));
     await card.updateComplete;
     $$(card, ".tl-tile")[0]!.click();
-    await card.updateComplete;
-    const media = $(card, ".tl-overlay .tl-overlay-media") as HTMLImageElement;
-    expect(media.tagName).toBe("IMG");
-    expect(media.getAttribute("src")).toBe(L("front", "car_20261019_124500_snapshot.jpg"));
-    expect(media.getAttribute("style")).toContain(P("front", "car_20261019_124500_snapshot.jpg"));
-    const nav = vi.fn();
-    window.addEventListener("location-changed", nav);
-    ($(card, ".tl-overlay-head .tl-btn") as HTMLButtonElement).click();
-    expect(window.location.pathname).toBe("/main-dashboard/camera1");
-    const q = new URLSearchParams(window.location.search);
-    expect(Object.fromEntries(q)).toEqual({
+    expect(moves).toEqual([
+      { url: expect.stringMatching(/^\/main-dashboard\/camera1\?/), replace: false },
+    ]);
+    expect(Object.fromEntries(new URLSearchParams(window.location.search))).toEqual({
       cgc_id: "camera1",
       cgc_view: "gallery",
       cgc_src: L("front", "car_20261019_124500_snapshot.jpg"),
-      cgc_time: String(at(12, 45)),
+      cgc_time: String(at(12, 50)), // where Low / High start and what a swipe carries on
     });
-    expect(nav).toHaveBeenCalledTimes(1);
-    await card.updateComplete;
-    expect($(card, ".tl-overlay")).toBeNull();
-    window.removeEventListener("location-changed", nav);
+    // As HA's own navigate: the entry knows where it came from, so HA's back arrow returns to the timeline.
+    expect(window.history.state).toEqual({ from: "/main-dashboard/timeline" });
+    // No viewer of its own: the camera's page is it.
+    expect($(card, "cgc-nvr-player, .tl-overlay, video")).toBeNull();
   });
 
-  it("without a gallery_id, Open camera goes to the plain page", async () => {
+  it("the timeline stops playing and keeps its moment for Back", async () => {
+    const card = await render();
+    card._setT(at(12, 50));
+    card._togglePlay();
+    await card.updateComplete;
+    expect(card._playing).toBe(true);
+    const t = card._t;
+    $$(card, ".tl-tile")[0]!.click();
+    await card.updateComplete;
+    expect(card._playing).toBe(false);
+    expect(card._t).toBe(t);
+  });
+
+  it("without a gallery_id, the camera's plain page; without a navigation_path, nothing", async () => {
     const card = await render({
       cameras: [
         { entity: "sensor.ft_front", name: "Front", navigation_path: "/main-dashboard/camera1" },
+        { entity: "sensor.ft_back", name: "Back" },
       ],
     });
     card._setT(at(12, 50));
     await card.updateComplete;
+    $$(card, ".tl-tile")[1]!.click();
+    expect(moves).toEqual([]);
+    expect(window.location.pathname).toBe("/main-dashboard/timeline");
     $$(card, ".tl-tile")[0]!.click();
-    await card.updateComplete;
-    ($(card, ".tl-overlay-head .tl-btn") as HTMLButtonElement).click();
     expect(window.location.pathname + window.location.search).toBe("/main-dashboard/camera1");
-  });
-
-  it("a video plays in the full view with its preview as poster", async () => {
-    const card = await render();
-    card._setT(at(13, 20));
-    await card.updateComplete;
-    $$(card, ".tl-tile")[2]!.click();
-    await card.updateComplete;
-    const video = $(card, ".tl-overlay video") as HTMLVideoElement;
-    expect(video.getAttribute("src")).toBe(L("door", "visitor_20261019_131000.mp4"));
-    expect(video.getAttribute("poster")).toBe(P("door", "visitor_20261019_131000.mp4"));
   });
 });
 
@@ -316,161 +326,6 @@ describe("preloading and updates", () => {
     const card: any = document.createElement("camera-timeline-card");
     expect(() => card.setConfig({ path_datetime_format: "YYYYMMDD_HHmmss" })).toThrow(/cameras/);
     expect(() => card.setConfig({ cameras: ["sensor.x"] })).toThrow(/path_datetime_format/);
-  });
-});
-
-describe("NVR recording in the full view (BL-008)", () => {
-  const btnTexts = (card: any) => $$(card, ".tl-overlay .tl-btn").map((b) => b.textContent!.trim());
-  const btn = (card: any, label: string) =>
-    $$(card, ".tl-overlay .tl-btn").find(
-      (b) => b.textContent!.trim() === label
-    ) as HTMLButtonElement;
-
-  it("Low / High play the camera's NVR recording from the moment on the track", async () => {
-    const cams = CONFIG.cameras.map((c, i) => (i === 0 ? { ...c, nvr_channel: 6 } : c));
-    const card = await render({ cameras: cams });
-    card._setT(at(13, 40));
-    await card.updateComplete;
-    $$(card, ".tl-tile")[0]!.click();
-    await card.updateComplete;
-    expect(btnTexts(card)).toEqual(["Low", "High", "Open camera", ""]);
-    btn(card, "High").click();
-    await card.updateComplete;
-    const player = $(card, ".tl-overlay-nvr cgc-nvr-player");
-    expect([player.channel, player.time, player.stream, player.addon]).toEqual([
-      6,
-      at(13, 40),
-      "main",
-      "local_nvr_playback",
-    ]);
-    expect(player.poster).toBe(P("front", "motion_20261019_133000.gif"));
-    expect(player.bare).toBe(true);
-    expect($(card, ".tl-overlay-head")!.textContent!.replace(/\s+/g, " ")).toContain(
-      "Front · NVR from"
-    );
-    expect(btn(card, "High").classList.contains("on")).toBe(true);
-    expect($(card, ".tl-overlay .tl-overlay-media")).toBeNull();
-
-    player.dispatchEvent(
-      new CustomEvent("nvr-stream", { detail: { stream: "sub" }, bubbles: true, composed: true })
-    );
-    await card.updateComplete;
-    expect(btn(card, "Low").classList.contains("on")).toBe(true);
-    player.dispatchEvent(new CustomEvent("nvr-close", { bubbles: true, composed: true }));
-    await card.updateComplete;
-    expect($(card, "cgc-nvr-player")).toBeNull();
-    expect($(card, ".tl-overlay .tl-overlay-media")).not.toBeNull();
-
-    // The lit button switches it off again.
-    btn(card, "Low").click();
-    await card.updateComplete;
-    expect($(card, "cgc-nvr-player")).not.toBeNull();
-    expect(btn(card, "Low").getAttribute("aria-pressed")).toBe("true");
-    btn(card, "Low").click();
-    await card.updateComplete;
-    expect($(card, "cgc-nvr-player")).toBeNull();
-  });
-
-  it("no Low / High for a camera without an nvr_channel", async () => {
-    const card = await render();
-    card._setT(at(13, 40));
-    await card.updateComplete;
-    $$(card, ".tl-tile")[1]!.click();
-    await card.updateComplete;
-    expect(btnTexts(card)).not.toContain("Low");
-    expect(btnTexts(card)).not.toContain("High");
-  });
-});
-
-describe("swiping between cameras in the full view (owner fork)", () => {
-  const swipeOn = async (card: any, el: Element, dx: number, y = 100) => {
-    const ev = (type: string, x: number) =>
-      new MouseEvent(type, { bubbles: true, composed: true, clientX: x, clientY: y });
-    el.dispatchEvent(ev("pointerdown", 200));
-    el.dispatchEvent(ev("pointerup", 200 + dx));
-    await card.updateComplete;
-  };
-  const media = (card: any) => $(card, ".tl-overlay .tl-overlay-media");
-  const swipeEvent = (detail: Record<string, unknown>) =>
-    new CustomEvent("nvr-swipe", { detail, bubbles: true, composed: true, cancelable: true });
-
-  it("a swipe on the frame shows the next camera's frame closest to the moment, round the cameras", async () => {
-    const card = await render();
-    card._setT(at(13, 40));
-    await card.updateComplete;
-    $$(card, ".tl-tile")[0]!.click();
-    await card.updateComplete;
-    expect(card._overlay.item.src).toBe(L("front", "motion_20261019_133000.gif"));
-    await swipeOn(card, media(card)!, -150);
-    expect([card._overlay.ci, card._overlay.item.src]).toEqual([
-      1,
-      L("back", "person_20261019_090000.gif"),
-    ]);
-    await swipeOn(card, media(card)!, -150);
-    // The doorbell: 13:55 is closer to 13:40 than 13:10.
-    expect([card._overlay.ci, card._overlay.item.src]).toEqual([
-      2,
-      L("door", "snapshot_20261019_135500.jpg"),
-    ]);
-    expect($(card, ".tl-overlay-head")!.textContent).toContain("Doorbell");
-    await swipeOn(card, media(card)!, -150); // round to the first
-    expect(card._overlay.ci).toBe(0);
-    await swipeOn(card, media(card)!, 150); // and back
-    expect(card._overlay.ci).toBe(2);
-    await swipeOn(card, media(card)!, -30); // too short
-    expect(card._overlay.ci).toBe(2);
-  });
-
-  it("streaming, the next camera streams from the moment on screen in that quality; one without a channel shows its frame and passes the stream on", async () => {
-    const cams = CONFIG.cameras.map((c, i) =>
-      i === 0 ? { ...c, nvr_channel: 6 } : i === 1 ? { ...c, nvr_channel: 0 } : c
-    );
-    const card = await render({ cameras: cams });
-    card._setT(at(13, 40));
-    await card.updateComplete;
-    $$(card, ".tl-tile")[0]!.click();
-    await card.updateComplete;
-    $$(card, ".tl-overlay .tl-btn")
-      .find((b) => b.textContent!.trim() === "High")!
-      .click();
-    await card.updateComplete;
-    let player = $(card, ".tl-overlay-nvr cgc-nvr-player");
-    expect(player.label).toBe("Front");
-    const ev = swipeEvent({ dir: 1, time: at(13, 41), stream: "main", fullscreen: false });
-    player.dispatchEvent(ev);
-    await card.updateComplete;
-    expect(ev.defaultPrevented).toBe(true);
-    player = $(card, ".tl-overlay-nvr cgc-nvr-player");
-    expect([player.channel, player.time, player.stream, player.label]).toEqual([
-      0,
-      at(13, 41),
-      "main",
-      "Back",
-    ]);
-    player.dispatchEvent(swipeEvent({ dir: 1, time: at(13, 42), stream: "main" }));
-    await card.updateComplete;
-    expect($(card, "cgc-nvr-player")).toBeNull(); // the doorbell has no recordings: its closest frame
-    expect(card._overlay).toMatchObject({ ci: 2, nvr: null, carry: "main", t: at(13, 42) });
-    expect(card._overlay.item.src).toBe(L("door", "snapshot_20261019_135500.jpg"));
-    await swipeOn(card, media(card)!, -150); // on to the first camera: streaming again, from the same moment
-    player = $(card, ".tl-overlay-nvr cgc-nvr-player");
-    expect([player.channel, player.time, player.stream]).toEqual([6, at(13, 42), "main"]);
-  });
-
-  it("a swipe that starts on a video's own controls (its bottom) is left to them", async () => {
-    const card = await render();
-    card._setT(at(13, 20));
-    await card.updateComplete;
-    $$(card, ".tl-tile")[2]!.click(); // the doorbell's 13:10 clip
-    await card.updateComplete;
-    const video = media(card)!;
-    expect(video.tagName).toBe("VIDEO");
-    video.getBoundingClientRect = () =>
-      ({ top: 0, bottom: 225, height: 225, left: 0, right: 400, width: 400 }) as DOMRect;
-    await swipeOn(card, video, -150, 210);
-    expect(card._overlay.ci).toBe(2);
-    await swipeOn(card, video, -150, 100);
-    expect(card._overlay.ci).toBe(0);
   });
 });
 

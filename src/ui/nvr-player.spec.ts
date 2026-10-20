@@ -324,7 +324,7 @@ describe("<cgc-nvr-player>", () => {
     expect(plays(calls)[2]).toMatchObject({ stream: "main", time: FILE_START + 1_800_000 + 1000 });
   });
 
-  it("bare: no top bar (the host has its own Low / High and close), full screen in the controls", async () => {
+  it("bare: inline, no top bar (the host has its own Low / High and close), full screen in the controls", async () => {
     installFetch(happyRoute());
     const el = await mount({ bare: true });
     expect(el.shadowRoot.querySelector(".nvr-bar")).toBeNull();
@@ -494,6 +494,31 @@ describe("<cgc-nvr-player>", () => {
       motion(9.5); // no longer listened to
       await el.updateComplete;
       expect(stage()).toBe("--nvr-rot:-90deg");
+    });
+
+    it("bare (a host with its own Low / High, the cars page): full screen shows the player's own bar", async () => {
+      const calls = installFetch(happyRoute());
+      const el = await mount({ bare: true });
+      expect(el.shadowRoot.querySelector(".nvr-res")).toBeNull(); // inline: the host's buttons
+      el.shadowRoot.querySelector(".nvr-fs").click();
+      await flush();
+      await el.updateComplete;
+      const res = [...el.shadowRoot.querySelectorAll(".nvr-res button")] as HTMLButtonElement[];
+      expect(res.map((b) => b.textContent!.trim())).toEqual(["Low", "High"]);
+      expect(el.shadowRoot.querySelector(".nvr-close")).not.toBeNull();
+      const streams: string[] = [];
+      el.addEventListener("nvr-stream", (e: any) => streams.push(e.detail.stream));
+      res[1]!.click();
+      await flush();
+      await el.updateComplete;
+      expect(streams).toEqual(["main"]); // the host hears of it
+      const all = plays(calls);
+      expect(all[all.length - 1]).toMatchObject({ stream: "main" });
+      expect(el.shadowRoot.querySelector(".nvr-res button.on")!.textContent!.trim()).toBe("High");
+      el.shadowRoot.querySelector(".nvr-fs").click();
+      await flush();
+      await el.updateComplete;
+      expect(el.shadowRoot.querySelector(".nvr-res")).toBeNull(); // inline again
     });
 
     it("someone else's full screen isn't the player's", async () => {

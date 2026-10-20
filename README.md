@@ -206,11 +206,16 @@ or slanted (up to 45°), and in the gallery's image full screen. While a recordi
 recording from the moment on screen, in the same quality. Otherwise it shows its snapshot closest to the moment.
 Full screen (the player's or the image's) stays full screen. A camera without `nvr_channel` (a doorbell) shows
 its closest snapshot, and swiping on from it streams again. The list has the timeline card's `cameras` shape
-(`gallery_id` = each gallery's `url_id`, `navigation_path` = its page), so one YAML anchor serves both. The
-timeline's full view swipes between its cameras the same way.
+(`gallery_id` = each gallery's `url_id`, `navigation_path` = its page), so one YAML anchor serves both.
+
+**From the timeline card:** a tap on a camera opens that camera's page, this gallery, on the frame shown at the
+timeline's moment. Low / High there play from that moment, a swipe carries it on to the next camera, and Back
+returns to the timeline on the same moment. The timeline has no viewer of its own, so every change to this one
+reaches it.
 
 The Vehicle Intelligence card's **Recording** button opens this same player (`<cgc-nvr-player>`, defined by this
-bundle), so it has the same controls and gestures, with that card's own Low / High and back button above it.
+bundle), so it has the same controls and gestures, with that card's own Low / High and back button above it. In
+full screen, where those can't be seen, the player shows its own Low / High and close, as in the gallery.
 
 The gallery's own full screen (the image button) does the same for a landscape snapshot or GIF: turned on a
 portrait screen, with pinch zoom and panning following the finger.
@@ -228,8 +233,7 @@ tap on a thumbnail, the chevrons, a new day or a link don't start it. `nvr_autop
 Low is the sub stream (H.264, plays everywhere). High is the main stream (HEVC, only where the device decodes
 it). This needs the **NVR Playback** add-on. It asks the NVR for the moment through the NVR's own protocol, as the
 Reolink app does, and serves it through Home Assistant ingress. If that protocol is refused, it falls back to
-fetching the recording file, and the progress then shows over the snapshot. The timeline card's cameras take
-`nvr_channel` too (Low / High in the full view).
+fetching the recording file, and the progress then shows over the snapshot.
 
 ### Video controls
 
@@ -347,7 +351,7 @@ Set a `url_id` in the editor's **Source → View** section (or `url_id: porch` i
 | `cgc_view` | `live` or `gallery` — which screen to open |
 | `cgc_camera` | An entry from the card's own live camera list — a camera entity, or a `live_stream_urls` stream — opens live view on that camera |
 | `cgc_src` | Owner fork: one of the card's own gallery files (e.g. `/local/snapshots/cam/motion_20261019_120000.gif`) — opens the gallery on that file, switching to its day |
-| `cgc_time` | Owner fork: a moment (epoch ms or seconds, or ISO 8601) — opens the gallery on the item at or just before it; the fallback when `cgc_src` is gone |
+| `cgc_time` | Owner fork: a moment (epoch ms or seconds, or ISO 8601) — opens the gallery on the item at or just before it; the fallback when `cgc_src` is gone. While the linked item stays selected, Low / High play from this moment and a swipe to the next camera carries it on |
 
 A worked example, e.g. from a motion automation:
 
@@ -370,7 +374,7 @@ data:
 > [!NOTE]
 > All of `cgc_id`, `cgc_view`, and `cgc_camera` are case-sensitive. `cgc_view=Gallery` isn't recognized as `gallery` — and if a camera is also present, that falls through to opening *live* instead, the opposite of what a mistyped gallery link probably intended. And if more than one card on the dashboard shares the same `url_id`, they'll all react to the same query string at once — keep `url_id` unique per card.
 
-> Owner fork: the parameters apply once and are then removed from the address, also when the card's page is opened by in-app navigation (a view HA had already built, e.g. from the timeline card's "Open camera"), not only on page load. A `cgc_src` that isn't one of the card's own items is ignored, so a link can't make the card load anything new.
+> Owner fork: the parameters apply once and are then removed from the address, also when the card's page is opened by in-app navigation (a view HA had already built, e.g. from a tap on a timeline card's camera), not only on page load. A `cgc_src` that isn't one of the card's own items is ignored, so a link can't make the card load anything new.
 
 ---
 

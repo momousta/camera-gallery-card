@@ -320,6 +320,9 @@ class CameraGalleryCard extends LitElement {
     // Swiped here streaming onto a camera without an NVR channel (the doorbell): its snapshot shows, and a swipe
     // on (while it stays selected) streams again.
     this._carry = null;
+    // The moment a link brought the viewer for (a timeline's moment, or the camera swiped from), with the item it
+    // selected: while that item is selected, Low / High play from that moment and a swipe carries it on.
+    this._moment = null;
     // Owner fork: a press anywhere outside the open calendar closes it.
     this._calOutside = new OutsidePress(() => this.renderRoot, () => this._closeDatePicker());
     this._deleted = new Set();
@@ -3669,7 +3672,7 @@ class CameraGalleryCard extends LitElement {
               @pointerdown=${(e) => e.stopPropagation()}
               @click=${(e) => {
                 e.stopPropagation();
-                this._startNvr(ctx.selected, dtMs, stream);
+                this._startNvr(ctx.selected, dtMs, stream, { at: this._momentOf(ctx.selected) });
               }}
             >
               <ha-icon icon="mdi:filmstrip-box"></ha-icon><span>${stream === "sub" ? "Low" : "High"}</span>
@@ -3687,6 +3690,11 @@ class CameraGalleryCard extends LitElement {
       default:
         return null;
     }
+  }
+
+  /** The moment a link brought the viewer for, while `src` is the item it selected; else null. */
+  _momentOf(src) {
+    return src && this._moment?.src === src ? this._moment.time : null;
   }
 
   /** BL-008: the configured NVR channel of this camera, or null (no Low / High buttons). */
@@ -3760,7 +3768,8 @@ class CameraGalleryCard extends LitElement {
   }
 
   /** What a swipe on the picture carries: the stream (and its moment) when one plays or was swiped here, else the
-   * selected item's moment. A quiet start that hasn't shown itself yet is a snapshot still. */
+   * moment a link brought the selected item for, else the item's own. A quiet start that hasn't shown itself yet
+   * is a snapshot still. */
   _swipeContext() {
     const item = this._selectedItem();
     const n = this._nvr;
@@ -3771,7 +3780,7 @@ class CameraGalleryCard extends LitElement {
     }
     if (this._carry && item?.src === this._carry.src)
       return { time: this._carry.time, stream: this._carry.stream, fullscreen: false };
-    return { time: item?.dtMs, stream: null, fullscreen: false };
+    return { time: this._momentOf(item?.src) ?? item?.dtMs, stream: null, fullscreen: false };
   }
 
   /** Arrived by a swipe that was streaming: stream on from the moment, or (no NVR channel) keep the stream to pass
@@ -4098,6 +4107,8 @@ class CameraGalleryCard extends LitElement {
       this._pendingScrollToI = i;
     }
     this._carry = null;
+    const moment = target.at ?? target.time;
+    this._moment = i >= 0 && Number.isFinite(moment) ? { src: filtered[i].src, time: moment } : null;
     if (target.nvr && i >= 0) this._arriveStreaming(filtered[i], target.at ?? target.time, target.nvr, !!target.fs);
     else if (target.fs && i >= 0) this._openImageFullscreen(); // swiped here from a full-screen snapshot
   }

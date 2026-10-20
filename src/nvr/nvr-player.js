@@ -1,12 +1,13 @@
 /**
- * <cgc-nvr-player> (BL-008): plays the NVR's recording from one moment, inside the gallery viewer or the
- * timeline's full view.
+ * <cgc-nvr-player> (BL-008): plays the NVR's recording from one moment. The one player for every host: the
+ * gallery viewer, and the Vehicle Intelligence card's Recording button (the timeline opens camera pages).
  *
  * Properties (set by the card):
  *   hass, channel (NVR channel), time (epoch ms to start at), stream ("sub" = Low, "main" = High),
  *   addon (add-on slug, default local_nvr_playback), poster (picture shown while the recording is fetched),
- *   bare (true where the host shows its own Low / High and close buttons: then the bar is the clock and full
- *   screen), quiet (load unseen: no progress, no error; the player shows itself once the video plays),
+ *   bare (true where the host shows its own Low / High and close buttons beside the player: then, inline, the
+ *   player shows no top bar; in full screen, where the host's buttons can't be seen, it shows its own),
+ *   quiet (load unseen: no progress, no error; the player shows itself once the video plays),
  *   label (the camera's name for saved files; without it the add-on uses the NVR's channel name),
  *   fullscreen (start in full screen: the viewer swiped here from a full-screen player)
  * Events (bubbling, composed):
@@ -1369,16 +1370,17 @@ export class CgcNvrPlayer extends LitElement {
               </div>`
             : ""}
           <div class="nvr-ui ${shown ? "shown" : ""}">
-            ${this.bare
-              ? "" /* the host has its own Low / High and close; the camera shows the time itself */
+            ${this.bare && !this._fullscreen
+              ? /* inline, the host shows its own Low / High and close; full screen hides them, so the player's
+                 * own bar is there (one bar for every host) */
+                zoomed
+                ? html`<div class="nvr-bar nvr-bar-min">${this._renderZoomChip()}</div>`
+                : ""
               : html`<div class="nvr-bar">
                   ${zoomed ? this._renderZoomChip() : ""}
                   <span class="nvr-gap"></span>
                   ${this._renderControls()}
                 </div>`}
-            ${this.bare && zoomed
-              ? html`<div class="nvr-bar nvr-bar-min">${this._renderZoomChip()}</div>`
-              : ""}
             ${this._phase === "playing"
               ? this._renderTransport(locale)
               : html`<div class="nvr-ctl nvr-ctl-min">${this._renderFullscreen()}</div>`}
