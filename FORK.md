@@ -9,7 +9,7 @@ owner's "push everything".
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything").
 
-- **Now:** build `3.1.0-owner.16` (`?v=46b2a8af7c40`) since 2026-10-20 16:47: NVR recordings from an exact moment.
+- **Now:** build `3.1.0-owner.17` (`?v=f6898cd586e8`) since 2026-10-20 22:01: NVR recordings from an exact moment.
   Needs the **NVR Playback** add-on `/addons/nvr_playback`, 0.2.1+ (0.4.0+ to save snapshots and clips, 0.4.1+ for
   cameras mounted sideways). Check the resource with `node deploy/ha-deploy.mjs status`. BL-008 so far:
   - Low / High; the strip coming to rest plays Low quietly;
@@ -33,10 +33,14 @@ owner's "push everything".
     swipes; Low / High there play that moment); the full screen button at the bottom right, as in the player;
     auto-play all is a time-lapse of the day (stills 1 s, GIFs 3 s, clips to their end), so it works on the
     doorbell's snapshots. Front's gallery is 8:3 (its whole wide picture).
+  - owner.17: a swipe in full screen stays full screen. The gallery's player makes the whole document full screen
+    and covers it (`docfs`), so the next camera's player takes it over without asking again; the old page's card
+    no longer exits the document's full screen when it goes.
   - The cars page (the Vehicle Intelligence card's Recording button) creates the same `<cgc-nvr-player>`, so every
     player change reaches it with nothing to change there.
 - **Earlier builds**, each saved in `/share/backups/bl002/<build>-<v>/`. To go back to one, copy both files into
   `dist/` and run `switch`.
+  - `3.1.0-owner.16` (`?v=46b2a8af7c40`, pictures full screen in the player): `owner.16-46b2a8af7c40/`.
   - `3.1.0-owner.15` (`?v=55615685f366`, one viewer: the timeline opens camera pages): `owner.15-55615685f366/`.
   - `3.1.0-owner.14` (`?v=5efdba698b31`, dependable swipes, sideways cameras upright, calendar):
     `owner.14-5efdba698b31/`.
@@ -318,6 +322,17 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
     - `swipevariants` from Front's new 8:3 box: all six moved;
     - doorbell: its snapshot full screen in the player, no Low / High, the close button;
     - `tlpage`: Timeline → Left Front on a 10-minute still, Low from the track's moment, Back to the same moment.
+- **owner.17** (10-20 22:01), live dashboards, Pixel 6 viewport, real CDP touches (`--script fs16 --fsmode strict`:
+  every full-screen request after the first one fails, as in the HA app's WebView without a fresh touch):
+  - **The owner's report:** "when I swipe to the next camera when on full screen, it doesn't load the next camera
+    on full screen".
+  - **Causes:** the full screen was the player element's own, so it ended with the page, and the next page's player
+    had to ask again (refused in the app; desktop Chromium allowed it, so earlier probes passed). The leaving page's
+    gallery card also exited any document full screen in its `disconnectedCallback` (upstream), and Home Assistant
+    attaches the next page before it removes the last.
+  - **Now:** snapshots Front Right → Front → Doorbell → (from Front) Left Front, all full screen, with one request
+    in total; the exit button back to the gallery; a stream on Left Front → Right Front playing full screen.
+  - **Regression:** `nvrswipe`, `nvrgest` (including the still full screen's pinch, 2.6×).
 - **Not checked:** real phones, iOS Safari (native HLS, HEVC), live WebRTC and talkback (WebRTC doesn't run in
   headless Chromium). The HA app's WebView was emulated by the portrait screen without an orientation lock.
 
@@ -381,6 +396,8 @@ Harness and results: `/share/dev/bl002-work`.
 | `build: fork version 3.1.0-owner.15`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 | `feat: pictures full screen in the NVR player; full screen button at the bottom right; auto-play all as a time-lapse` | Player: `still` (a snapshot or GIF shown in the player until Low / High: the same turn, overlay controls that hide, pinch / double-tap zoom, swipes; Low / High play that moment's recording in place), `nvr-fullscreen` event, a window-covering full screen where there is no element full screen (an iPhone). Gallery: a picture's full screen opens the player (still mode; clips keep the gallery's overlay), ending back in the gallery unless a recording started; the full screen pill moves to the picture's bottom right (`.pfs-btn`, overlay mode); auto-play all steps forward in time through stills (1 s), GIFs (3 s) and clips (to their end), stopping at the newest, a second tap, or another pick                               | Owner 10-20 16:17: full screen on snapshots / GIFs "as it works for streaming", the button where the player has it, auto-play on the doorbell                                                                                              |
 | `build: fork version 3.1.0-owner.16`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
+| `fix(fullscreen): a swipe in full screen stays full screen`                                                           | Player `docfs` (set by the gallery): full screen is the player covering the window, with the document full screen underneath; ownership is handed to the next page's player on a swipe (no second request; a 10 s timer ends it if nobody takes it), and only the owner ends it. The gallery's `disconnectedCallback` exits only its own (element) full screen                                                                                                                                                                                                                                                                                                                                                                                    | Owner 10-20 21:46: "when I swipe to the next camera when on full screen, it doesn't load the next camera on full screen"                                                                                                                   |
+| `build: fork version 3.1.0-owner.17`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 
 ## Build and test
 
