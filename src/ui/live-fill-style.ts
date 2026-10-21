@@ -30,12 +30,16 @@ const LIVE_FILL_CSS = `
   img, video, ha-hls-player, ha-web-rtc-player, ha-camera-stream { width:100%!important; height:100%!important; object-fit:cover!important; display:block!important; position:static!important; }
 `;
 
-function injectInto(el: Element): void {
+/** Owner fork: `contain` shows the whole picture (the Cameras page's tiles); the gallery keeps `cover`. */
+export type LiveFit = "cover" | "contain";
+const CONTAIN_CSS = `img, video { object-fit:contain!important; }`;
+
+function injectInto(el: Element, fit: LiveFit = "cover"): void {
   const sr = el.shadowRoot;
   if (!sr || sr.querySelector(`#${LIVE_FILL_STYLE_ID}`)) return;
   const s = document.createElement("style");
   s.id = LIVE_FILL_STYLE_ID;
-  s.textContent = LIVE_FILL_CSS;
+  s.textContent = fit === "contain" ? LIVE_FILL_CSS + CONTAIN_CSS : LIVE_FILL_CSS;
   sr.appendChild(s);
   // Neutralize hui-image's padding-bottom aspect-ratio hack so the inner
   // <img> can grow to the host's full height.
@@ -43,22 +47,22 @@ function injectInto(el: Element): void {
   if (ratio) ratio.style.setProperty("padding-bottom", "0", "important");
 }
 
-function injectDeep(root: ParentNode): void {
+function injectDeep(root: ParentNode, fit: LiveFit = "cover"): void {
   for (const el of root.querySelectorAll("*")) {
     if (el.shadowRoot) {
-      injectInto(el);
-      injectDeep(el.shadowRoot);
+      injectInto(el, fit);
+      injectDeep(el.shadowRoot, fit);
     }
   }
 }
 
-export function injectLiveFillStyle(card: Element): void {
-  injectInto(card);
+export function injectLiveFillStyle(card: Element, fit: LiveFit = "cover"): void {
+  injectInto(card, fit);
 
   const tryInject = (): boolean => {
     const sr = card.shadowRoot;
     if (!sr) return false;
-    injectDeep(sr);
+    injectDeep(sr, fit);
     return true;
   };
 
@@ -73,6 +77,6 @@ export function injectLiveFillStyle(card: Element): void {
   // Re-walk after a short delay; some hui-image children mount after the
   // parent's first paint.
   setTimeout(() => {
-    if (card.shadowRoot) injectDeep(card.shadowRoot);
+    if (card.shadowRoot) injectDeep(card.shadowRoot, fit);
   }, LIVE_FILL_REINJECT_DELAY_MS);
 }

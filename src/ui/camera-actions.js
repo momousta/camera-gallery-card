@@ -44,6 +44,79 @@ export function cameraActions(states, { floodlight, siren }, sirenState = {}, no
   return out;
 }
 
+/**
+ * The buttons' behaviour, one per card (the gallery, a camera tile): the floodlight toggles; the siren arms on a
+ * first tap (SIREN_ARM_MS), sounds on a second (`siren_duration` s, default SIREN_DEFAULT_S), and a tap while it
+ * sounds stops it. `host` re-renders on `requestUpdate()`; `onError(text)` shows a failure.
+ */
+export class CameraActionController {
+  constructor(host, onError = () => {}) {
+    this.host = host;
+    this.onError = onError;
+    this.siren = {}; // { until } while sounding, { armedUntil } while armed (epoch ms)
+    this.timer = 0;
+  }
+
+  /** The buttons for this config ({ floodlight_entity, siren_entity }). */
+  list(hass, cfg) {
+    return cameraActions(
+      hass?.states,
+      { floodlight: cfg?.floodlight_entity, siren: cfg?.siren_entity },
+      this.siren
+    );
+  }
+
+  press(id, hass, cfg) {
+    if (!hass) return;
+    const fail = (what) => (err) =>
+      this.onError(`${what}: ${err?.message || "the camera didn't answer"}`);
+    if (id === "floodlight") {
+      const e = cfg?.floodlight_entity;
+      const on = hass.states?.[e]?.state === "on";
+      Promise.resolve(
+        hass.callService("light", on ? "turn_off" : "turn_on", { entity_id: e })
+      ).catch(fail("Floodlight"));
+    } else if (id === "siren") {
+      const e = cfg?.siren_entity;
+      const now = Date.now();
+      const st = this.siren;
+      clearTimeout(this.timer);
+      const later = (ms) => {
+        this.timer = setTimeout(() => {
+          this.siren = {};
+          this.host.requestUpdate();
+        }, ms);
+      };
+      if ((st.until || 0) > now || hass.states?.[e]?.state === "on") {
+        this.siren = {};
+        Promise.resolve(hass.callService("siren", "turn_off", { entity_id: e })).catch(
+          fail("Siren")
+        );
+      } else if ((st.armedUntil || 0) > now) {
+        const secs = Number(cfg?.siren_duration) || SIREN_DEFAULT_S;
+        this.siren = { until: now + secs * 1000 };
+        later(secs * 1000 + 50);
+        Promise.resolve(
+          hass.callService("siren", "turn_on", { entity_id: e, duration: secs })
+        ).catch((err) => {
+          this.siren = {};
+          fail("Siren")(err);
+          this.host.requestUpdate();
+        });
+      } else {
+        this.siren = { armedUntil: now + SIREN_ARM_MS };
+        later(SIREN_ARM_MS + 50);
+      }
+    }
+    this.host.requestUpdate();
+  }
+
+  stop() {
+    clearTimeout(this.timer);
+    this.siren = {};
+  }
+}
+
 /** The buttons; `onAction(id)` on a press. Taps never reach the picture under them. */
 export function renderCameraActions(actions, onAction, { visible = true, cls = "" } = {}) {
   if (!actions?.length) return "";

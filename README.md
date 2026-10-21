@@ -235,6 +235,16 @@ snapshots, GIFs, clips, live, and the NVR player (inline and full screen, above 
 player could carry them too. The floodlight lights up yellow while on. The siren takes two taps (a stray tap
 doesn't sound it), pulses red while it sounds, and stops on a tap.
 
+**Camera tiles** (`custom:camera-tile-card`, same bundle; owner fork): one camera's live picture for an overview
+page, in the same design: the name at the top left, a red chip while a `detections` sensor is on, the floodlight
+and siren buttons (the same code and two-tap siren as the gallery) at the bottom left, full screen at the bottom
+right. A tap opens the camera's page (`navigation_path`; Back returns). Full screen covers the window over the
+document's full screen: a landscape camera turns on a portrait screen, the controls hide and come back on a tap, a
+double tap or a pinch zooms, and a swipe goes to the page's next tile, still full screen. Options: `entity` (the
+live stream, Home Assistant's own player), `name`, `navigation_path`, `aspect_ratio` (`"9:16"` for a camera on its
+side), `fit` (`contain` default, or `cover`), `live: false` (a still refreshed every 10 s, for a battery doorbell),
+`floodlight_entity`, `siren_entity`, `siren_duration`, `detections` (`entity`, `label`, `icon`).
+
 **Cameras mounted sideways** (a portrait picture): the NVR records the sensor's landscape frame. The add-on's
 `rotate_channels` option (NVR Playback 0.4.1+) says how far to turn a channel. The player then shows it upright,
 in a portrait box, and keeps full screen portrait. Saved snapshots are upright, and saved clips carry the turn,

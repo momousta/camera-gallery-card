@@ -44,13 +44,9 @@ import { sidecarFolder, sidecarUrl } from "./data/sidecar";
 import { planPreload, ThumbPreloader } from "./data/preload";
 import { monthOf } from "./data/calendar";
 import { OutsidePress, renderCalendarPicker } from "./ui/calendar-picker";
-import {
-  SIREN_ARM_MS,
-  SIREN_DEFAULT_S,
-  cameraActionStyles,
-  cameraActions,
-  renderCameraActions,
-} from "./ui/camera-actions";
+import { CameraActionController, cameraActionStyles, renderCameraActions } from "./ui/camera-actions";
+// Owner fork: the live camera tile of the Cameras page (<camera-tile-card>), same bundle.
+import "./tile/camera-tile-card.js";
 import { calendarPickerStyles } from "./ui/calendar-picker-styles";
 // BL-007: the multi-camera timeline card ships in the same bundle (<camera-timeline-card>).
 import "./timeline/timeline-card.js";
@@ -928,8 +924,7 @@ class CameraGalleryCard extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._calOutside?.stop();
-    clearTimeout(this._sirenTimer);
-    this._siren = {};
+    this._camActs?.stop();
     this._stopAutoplayAll();
 
     document.removeEventListener("fullscreenchange", this._onFullscreenChange);
@@ -3818,59 +3813,17 @@ class CameraGalleryCard extends LitElement {
 
   // ─── Owner fork: the camera's floodlight and siren (ui/camera-actions) ─────────
 
-  /** This camera's action buttons (floodlight_entity, siren_entity), for the gallery and the player alike. */
+  /** This camera's action buttons (floodlight_entity, siren_entity), for the gallery and the player alike; their
+   * behaviour is ui/camera-actions' (shared with the Cameras page's tiles). */
   _cameraActionList() {
-    return cameraActions(
-      this._hass?.states,
-      { floodlight: this.config?.floodlight_entity, siren: this.config?.siren_entity },
-      this._siren || {}
-    );
+    this._camActs ??= new CameraActionController(this, (t) => this._showSnapshotToast(t));
+    return this._camActs.list(this._hass, this.config);
   }
 
-  /** A press: the floodlight toggles; the siren arms on a first tap, sounds on a second within SIREN_ARM_MS (for
-   * siren_duration s), and a tap while it sounds stops it. */
   _onCameraAction(id) {
-    const hass = this._hass;
-    if (!hass) return;
-    const fail = (what) => (err) =>
-      this._showSnapshotToast(`${what}: ${err?.message || "the camera didn't answer"}`);
-    if (id === "floodlight") {
-      const e = this.config?.floodlight_entity;
-      const on = hass.states?.[e]?.state === "on";
-      Promise.resolve(hass.callService("light", on ? "turn_off" : "turn_on", { entity_id: e })).catch(
-        fail("Floodlight")
-      );
-    } else if (id === "siren") {
-      const e = this.config?.siren_entity;
-      const now = Date.now();
-      const st = this._siren || {};
-      clearTimeout(this._sirenTimer);
-      const later = (ms) => {
-        this._sirenTimer = setTimeout(() => {
-          this._siren = {};
-          this.requestUpdate();
-        }, ms);
-      };
-      if ((st.until || 0) > now || hass.states?.[e]?.state === "on") {
-        this._siren = {};
-        Promise.resolve(hass.callService("siren", "turn_off", { entity_id: e })).catch(fail("Siren"));
-      } else if ((st.armedUntil || 0) > now) {
-        const secs = Number(this.config?.siren_duration) || SIREN_DEFAULT_S;
-        this._siren = { until: now + secs * 1000 };
-        later(secs * 1000 + 50);
-        Promise.resolve(
-          hass.callService("siren", "turn_on", { entity_id: e, duration: secs })
-        ).catch((err) => {
-          this._siren = {};
-          fail("Siren")(err);
-        });
-      } else {
-        this._siren = { armedUntil: now + SIREN_ARM_MS };
-        later(SIREN_ARM_MS + 50);
-      }
-    }
+    this._camActs ??= new CameraActionController(this, (t) => this._showSnapshotToast(t));
+    this._camActs.press(id, this._hass, this.config);
     this._showPills();
-    this.requestUpdate();
   }
 
   /** BL-008: the configured NVR channel of this camera, or null (no Low / High buttons). */
