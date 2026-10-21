@@ -9,7 +9,7 @@ owner's "push everything".
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything").
 
-- **Now:** build `3.1.0-owner.18` (`?v=736ca029ebe5`) since 2026-10-21 11:37: NVR recordings from an exact moment.
+- **Now:** build `3.1.0-owner.19` (`?v=48f61118555c`) since 2026-10-21 12:40: NVR recordings from an exact moment.
   Needs the **NVR Playback** add-on `/addons/nvr_playback`, 0.2.1+ (0.4.0+ to save snapshots and clips, 0.4.1+ for
   cameras mounted sideways). Check the resource with `node deploy/ha-deploy.mjs status`. BL-008 so far:
   - Low / High; the strip coming to rest plays Low quietly;
@@ -38,10 +38,13 @@ owner's "push everything".
     no longer exits the document's full screen when it goes.
   - owner.18: floodlight and siren buttons (`floodlight_entity`, `siren_entity`, `siren_duration`) at the picture's
     bottom left, in the gallery and the player alike (`ui/camera-actions.js`).
+  - owner.19: `camera-tile-card`, the Cameras page's live tiles in the same design (the same action buttons, full
+    screen that swipes between tiles); the gallery's buttons now run on the shared `CameraActionController`.
   - The cars page (the Vehicle Intelligence card's Recording button) creates the same `<cgc-nvr-player>`, so every
     player change reaches it with nothing to change there.
 - **Earlier builds**, each saved in `/share/backups/bl002/<build>-<v>/`. To go back to one, copy both files into
   `dist/` and run `switch`.
+  - `3.1.0-owner.18` (`?v=736ca029ebe5`, floodlight and siren buttons): `owner.18-736ca029ebe5/`.
   - `3.1.0-owner.17` (`?v=f6898cd586e8`, swipes keep full screen): `owner.17-f6898cd586e8/`.
   - `3.1.0-owner.16` (`?v=46b2a8af7c40`, pictures full screen in the player): `owner.16-46b2a8af7c40/`.
   - `3.1.0-owner.15` (`?v=55615685f366`, one viewer: the timeline opens camera pages): `owner.15-55615685f366/`.
@@ -345,6 +348,15 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
     screen; a floodlight tap → `light.turn_on light.front_right_floodlight`; the siren: one tap armed ("Tap again"),
     the second → `siren.turn_on` with `duration: 10` (pulsing red), a third → `siren.turn_off`.
   - Regression: `nvrgest` (skips, pinch, the still full screen's pinch).
+- **owner.19** (10-21 12:40), the Cameras page, Pixel 6 viewport, real CDP touches (`--script tiles`, strict: one
+  full-screen request allowed; service calls answered by the relay):
+  - **The owner's ask:** "fix the main camera view to make it consistent with what we built, so everything is in
+    harmony" (the page with the Timeline button).
+  - 8 tiles: the 7 live streams playing (896×512; Front 1536×576 in an 8:3 tile; Left / Right Front 512×896 in 9:16
+    tiles side by side), the doorbell's still; floodlight and siren on the 7. Full screen on Front Right (turned),
+    a swipe → Front, full screen, one request; its exit button left it; the siren armed on one tap.
+  - The doorbell's 10 s refresh blanked its still while the next loaded; it now swaps once loaded.
+  - Regression: `swipevariants` on Front's gallery (all six moved).
 - **Not checked:** real phones, iOS Safari (native HLS, HEVC), live WebRTC and talkback (WebRTC doesn't run in
   headless Chromium). The HA app's WebView was emulated by the portrait screen without an orientation lock.
 
@@ -412,6 +424,8 @@ Harness and results: `/share/dev/bl002-work`.
 | `build: fork version 3.1.0-owner.17`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 | `feat: floodlight and siren buttons over the picture`                                                                 | `ui/camera-actions.js` (states → buttons, the buttons, their styles), used by the gallery (over snapshots, GIFs, clips, live) and the player (`actions`, `nvr-action`; above its seek bar while it plays). Options `floodlight_entity`, `siren_entity`, `siren_duration`. The siren arms on a first tap (3 s), sounds on the second, stops on a tap                                                                                                                                                                                                                                                                                                                                                                                               | Owner 10-21: "add flash and siren controls to the cameras … on top of the still images, GIFs, videos, or live stream, similar to the full screen button"                                                                                   |
 | `build: fork version 3.1.0-owner.18`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
+| `feat: camera-tile-card, the Cameras page's live tiles in the gallery's design`                                       | `src/tile/camera-tile-card.js`: HA's live player (`ha-camera-stream`, loaded via a hidden picture card if needed), whole picture (`injectLiveFillStyle(…, "contain")`), name, detection chips, the shared action buttons (`CameraActionController`, now also the gallery's), full screen over the document's (turn, hide, zoom, swipe to the next tile with no second request), tap → `navigation_path` with HA's `from`; `live: false` refreshes a still every 10 s (swapped once loaded)                                                                                                                                                                                                                                                        | Owner 10-21: "fix the main camera view to make it consistent with what we built, so everything is in harmony"                                                                                                                              |
+| `build: fork version 3.1.0-owner.19`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 
 ## Build and test
 
