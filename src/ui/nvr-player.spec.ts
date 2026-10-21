@@ -1307,3 +1307,159 @@ describe("a snapshot or GIF: the player's still mode (owner 10-20 16:17)", () =>
     expect(el.hasAttribute("pseudo")).toBe(false);
   });
 });
+
+describe("docfs: full screen that survives a swipe to the next camera's page (owner 10-20 21:46)", () => {
+  let inner: Element | null = null;
+  const enter = (el: Element) => {
+    inner = el;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  };
+  const request = vi.fn(async function (this: Element) {
+    enter(this);
+  });
+  const exit = vi.fn(async () => {
+    inner = null;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  });
+  beforeEach(() => {
+    inner = null;
+    request.mockClear();
+    exit.mockClear();
+    Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+      configurable: true,
+      value: request,
+    });
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => inner });
+    Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exit });
+    vi.stubGlobal("screen", {
+      orientation: { lock: vi.fn(() => Promise.resolve()), unlock: vi.fn() },
+    });
+  });
+  afterEach(() => {
+    delete (HTMLElement.prototype as any).requestFullscreen;
+    delete (document as any).fullscreenElement;
+    delete (document as any).exitFullscreen;
+  });
+  const STILL = "/local/snapshots/cam/snapshot_20261020_120000.jpg";
+
+  it("full screen is the document's, covered by the player; a swipe hands it to the next page's player", async () => {
+    installFetch(happyRoute());
+    const a = await mount({ still: STILL, stream: null, docfs: true });
+    a.shadowRoot.querySelector(".nvr-fs").click();
+    await flush();
+    await a.updateComplete;
+    expect(request.mock.contexts[0]).toBe(document.documentElement);
+    expect([a._fullscreen, a._pseudo]).toEqual([true, true]);
+    // The host moves to the next camera's page (cancels the swipe) and this player goes with the old page.
+    a.addEventListener("nvr-swipe", (e: Event) => e.preventDefault());
+    a._swipe(1);
+    a.remove();
+    await flush();
+    expect(exit).not.toHaveBeenCalled();
+    expect(inner).toBe(document.documentElement); // still full screen
+    // The next page's player arrives full screen: it takes over without asking again.
+    const b = await mount({ still: STILL, stream: null, docfs: true, fullscreen: true });
+    await flush();
+    await b.updateComplete;
+    expect(request).toHaveBeenCalledTimes(1);
+    expect([b._fullscreen, b._pseudo]).toEqual([true, true]);
+    expect(b.shadowRoot.querySelector(".nvr").classList.contains("fs")).toBe(true);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(exit).not.toHaveBeenCalled(); // taken over: the hand-off timer does nothing
+    // Its exit button leaves full screen for real.
+    b.shadowRoot.querySelector(".nvr-fs").click();
+    await flush();
+    await b.updateComplete;
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(b._fullscreen).toBe(false);
+  });
+
+  it("Back / Esc (the document leaves full screen) leaves the player's too; closing it leaves the document's", async () => {
+    installFetch(happyRoute());
+    const a = await mount({ still: STILL, stream: null, docfs: true, fullscreen: true });
+    await flush();
+    await a.updateComplete;
+    expect(a._fullscreen).toBe(true);
+    inner = null;
+    document.dispatchEvent(new Event("fullscreenchange"));
+    await a.updateComplete;
+    expect([a._fullscreen, a._pseudo]).toEqual([false, false]);
+    const b = await mount({ still: STILL, stream: null, docfs: true, fullscreen: true });
+    await flush();
+    b.remove(); // closed without a swipe
+    expect(exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("refused (no recent touch) or impossible (an iPhone): the player still covers the window", async () => {
+    installFetch(happyRoute());
+    request.mockImplementationOnce(async () => {
+      throw new Error("not allowed");
+    });
+    const a = await mount({ still: STILL, stream: null, docfs: true, fullscreen: true });
+    await flush();
+    await a.updateComplete;
+    expect([a._fullscreen, a._pseudo]).toEqual([true, true]);
+    expect(inner).toBeNull();
+  });
+
+  it("a swipe nobody takes leaves the document full screen as it was, and no hand-off pending", async () => {
+    installFetch(happyRoute());
+    const a = await mount({ still: STILL, stream: null, docfs: true, fullscreen: true });
+    await flush();
+    a._swipe(1); // not cancelled: no other page
+    a.remove();
+    expect(exit).toHaveBeenCalledTimes(1); // the player went away for good: so does full screen
+  });
+});
+
+describe("docfs hand-off when the next page's player arrives before the last one leaves", () => {
+  let inner: Element | null = null;
+  const enter = (el: Element) => {
+    inner = el;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  };
+  const request = vi.fn(async function (this: Element) {
+    enter(this);
+  });
+  const exit = vi.fn(async () => {
+    inner = null;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  });
+  beforeEach(() => {
+    inner = null;
+    request.mockClear();
+    exit.mockClear();
+    Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+      configurable: true,
+      value: request,
+    });
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => inner });
+    Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exit });
+    vi.stubGlobal("screen", {
+      orientation: { lock: vi.fn(() => Promise.resolve()), unlock: vi.fn() },
+    });
+  });
+  afterEach(() => {
+    delete (HTMLElement.prototype as any).requestFullscreen;
+    delete (document as any).fullscreenElement;
+    delete (document as any).exitFullscreen;
+  });
+
+  it("the old page's player leaving afterwards doesn't end the new one's full screen", async () => {
+    installFetch(happyRoute());
+    const still = "/local/snapshots/cam/snapshot_20261020_120000.jpg";
+    const a = await mount({ still, stream: null, docfs: true, fullscreen: true });
+    await flush();
+    a.addEventListener("nvr-swipe", (e: Event) => e.preventDefault());
+    a._swipe(1);
+    const b = await mount({ still, stream: null, docfs: true, fullscreen: true }); // attached first
+    await flush();
+    a.remove(); // then the old page goes
+    await flush();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(exit).not.toHaveBeenCalled();
+    expect(inner).toBe(document.documentElement);
+    expect([b._fullscreen, b._pseudo]).toEqual([true, true]);
+    expect((screen as any).orientation.unlock).not.toHaveBeenCalled();
+  });
+});

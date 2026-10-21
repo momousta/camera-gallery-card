@@ -936,7 +936,10 @@ class CameraGalleryCard extends LitElement {
     window.removeEventListener('keydown', this._onLiveCameraKeydown);
     window.removeEventListener("keydown", this._onPtzKeyDown);
     window.removeEventListener("keyup", this._onPtzKeyUp);
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    // Only this card's own full screen (its clip overlay, its live view). The document's full screen belongs to the
+    // NVR player, handed to the next camera's page on a swipe (owner fork): leaving this page must not end it.
+    if (document.fullscreenElement && document.fullscreenElement !== document.documentElement)
+      document.exitFullscreen().catch(() => {});
 
     this._stopMediaPoll();
     this._unsubscribeFrigateEvents();
@@ -6679,6 +6682,7 @@ class CameraGalleryCard extends LitElement {
                   .quiet=${!!this._nvr.quiet}
                   .fullscreen=${!!this._nvr.fullscreen}
                   .still=${this._nvr.still || ""}
+                  .docfs=${true}
                   .label=${this._cameraLabel()}
                   @nvr-close=${() => this._stopNvr()}
                   @nvr-fullscreen=${(e) => this._onNvrFullscreen(e)}

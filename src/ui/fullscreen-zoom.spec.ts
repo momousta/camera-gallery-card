@@ -115,7 +115,7 @@ describe("BL-008: landscape full screen on a portrait screen (a picture: the pla
     delete (document as any).exitFullscreen;
   });
 
-  it("asks for the real full screen on the player, turns a landscape picture (not a portrait one), and ends back in the gallery", async () => {
+  it("asks for the document's full screen, covers it with the player, turns a landscape picture (not a portrait one), and ends back in the gallery", async () => {
     screenIs(true);
     vi.stubGlobal("DeviceMotionEvent", class {});
     let inner: Element | null = null;
@@ -137,7 +137,7 @@ describe("BL-008: landscape full screen on a portrait screen (a picture: the pla
     });
     Object.defineProperty(document, "fullscreenElement", {
       configurable: true,
-      get: () => (inner ? document.body : null),
+      get: () => inner,
     });
     const card = await renderCard();
     card._openImageFullscreen();
@@ -146,10 +146,12 @@ describe("BL-008: landscape full screen on a portrait screen (a picture: the pla
     await p.updateComplete;
     for (let i = 0; i < 3; i++) await Promise.resolve();
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.contexts[0]).toBe(p.shadowRoot.querySelector(".nvr"));
+    // The whole document (it stays full screen across a swipe to the next camera's page); the player covers it.
+    expect(request.mock.contexts[0]).toBe(document.documentElement);
     document.dispatchEvent(new Event("fullscreenchange"));
     await p.updateComplete;
     expect(p._fullscreen).toBe(true);
+    expect(p._pseudo).toBe(true);
     const img = p.shadowRoot.querySelector("img.nvr-still");
     Object.defineProperty(img, "naturalWidth", { configurable: true, value: 400 });
     Object.defineProperty(img, "naturalHeight", { configurable: true, value: 300 });

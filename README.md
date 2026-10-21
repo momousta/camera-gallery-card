@@ -204,7 +204,9 @@ camera of the list at the same moment, replacing the page (Back goes where you c
 the picture, also starting on the chevrons (a tap on them still steps through the snapshots), slowly (up to 5 s)
 or slanted (up to 45°), and in the gallery's image full screen. While a recording plays, that camera plays its
 recording from the moment on screen, in the same quality. Otherwise it shows its snapshot closest to the moment.
-Full screen (the player's or the image's) stays full screen. A camera without `nvr_channel` (a doorbell) shows
+Full screen (the player's or the image's) stays full screen: in the gallery the player's full screen is the whole document's, which outlasts
+the page change, and the player covers it, so the next camera's player takes it over without asking the
+browser again (the Home Assistant app refuses a second request without a fresh touch). A camera without `nvr_channel` (a doorbell) shows
 its closest snapshot, and swiping on from it streams again. The list has the timeline card's `cameras` shape
 (`gallery_id` = each gallery's `url_id`, `navigation_path` = its page), so one YAML anchor serves both.
 

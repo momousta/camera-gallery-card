@@ -10,6 +10,9 @@
  *   quiet (load unseen: no progress, no error; the player shows itself once the video plays),
  *   label (the camera's name for saved files; without it the add-on uses the NVR's channel name),
  *   fullscreen (start in full screen: the viewer swiped here from a full-screen player)
+ *   docfs (the host moves between pages while full screen, the gallery's camera swipes: full screen is the
+ *   player covering the window, with the whole document full screen underneath, so it survives the page change and
+ *   the next camera's player takes it over without asking again; an element's own full screen ends with the page)
  *   still (a snapshot or GIF to show until Low / High is asked for: the gallery's full screen for pictures, so
  *   pictures and recordings share one viewer: its turn, controls, zoom, swipes; a double tap zooms a picture)
  * Events (bubbling, composed):
@@ -211,6 +214,49 @@ function bufferedEnd(video) {
   return 0;
 }
 
+/** Full screen handed from one camera page's player to the next (docfs): the player that owns it (only the owner
+ * may end it: Home Assistant can attach the next page before it removes the last one), until when a swipe's
+ * hand-off is expected, and the timer that leaves full screen if no player takes it over. */
+const HANDOFF_MS = 10_000;
+const handoff = { owner: null, until: 0, timer: 0 };
+
+function docFsEl() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+/** The whole document full screen (it stays across Home Assistant's page changes); true when it is. */
+async function enterDocFs() {
+  const el = document.documentElement;
+  if (docFsEl() === el) return true;
+  if (docFsEl()) return false; // something else is full screen
+  const request = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!request) return false;
+  try {
+    await request.call(el, { navigationUI: "hide" });
+    return true;
+  } catch {
+    return false; // refused (no recent touch) or not supported (an iPhone): the player still covers the window
+  }
+}
+
+function exitDocFs() {
+  if (docFsEl() !== document.documentElement) return;
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  try {
+    Promise.resolve(exit?.call(document)).catch(() => {});
+  } catch {
+    /* already left */
+  }
+}
+
+function unlockOrientation() {
+  try {
+    screen.orientation?.unlock?.();
+  } catch {
+    /* nothing locked */
+  }
+}
+
 export class CgcNvrPlayer extends LitElement {
   static get properties() {
     return {
@@ -225,6 +271,7 @@ export class CgcNvrPlayer extends LitElement {
       label: { type: String },
       fullscreen: { type: Boolean },
       still: { type: String },
+      docfs: { type: Boolean },
       _phase: { state: true },
       _status: { state: true },
       _error: { state: true },
@@ -268,6 +315,8 @@ export class CgcNvrPlayer extends LitElement {
     this.label = "";
     this.fullscreen = false;
     this.still = "";
+    this.docfs = false;
+    this._docFsOn = false; // the document is full screen for this player
     this._streaming = false; // Low / High was asked for over a still: it plays the recording now
     this._stillPortrait = false;
     this._pseudo = false; // full screen by covering the window (no element full screen: an iPhone)
@@ -339,8 +388,27 @@ export class CgcNvrPlayer extends LitElement {
     clearTimeout(this._toastTimer);
     this._finishRecording();
     this._teardown();
+    if (this.docfs && this._pseudo && handoff.owner !== this) {
+      // The next camera's player has taken the full screen over already: leave it (and the orientation) alone.
+      this._locked = false;
+    } else if (this.docfs && this._pseudo && handoff.until > performance.now()) {
+      // Swiped to the next camera's page, whose player takes it over: no exit, no orientation unlock (yet).
+      handoff.owner = null;
+      clearTimeout(handoff.timer);
+      handoff.timer = setTimeout(() => {
+        if (handoff.owner) return;
+        handoff.until = 0;
+        exitDocFs();
+        unlockOrientation();
+      }, HANDOFF_MS);
+      this._locked = false;
+    } else if (this.docfs && handoff.owner === this) {
+      handoff.owner = null;
+      if (this._docFsOn) exitDocFs();
+    }
     this._pseudo = false;
     this._leftFullscreen();
+    this._docFsOn = false;
     if (this._phase !== "idle" && this._phase !== "still") {
       this._detached = true;
       this._resumeAt = this._clock;
@@ -1278,7 +1346,10 @@ export class CgcNvrPlayer extends LitElement {
       composed: true,
       cancelable: true,
     });
+    if (this.docfs && this._fullscreen && handoff.owner === this)
+      handoff.until = performance.now() + HANDOFF_MS;
     if (!this.dispatchEvent(ev)) this._finishRecording();
+    else handoff.until = 0; // nobody moved
   }
 
   // ── full screen (landscape) ─────────────────────────────────────────
@@ -1286,6 +1357,15 @@ export class CgcNvrPlayer extends LitElement {
   async _toggleFullscreen() {
     if (this._pseudo) {
       this._setPseudo(false);
+      if (this.docfs && handoff.owner === this) {
+        handoff.owner = null;
+        if (this._docFsOn) exitDocFs();
+      }
+      this._docFsOn = false;
+      return;
+    }
+    if (this.docfs) {
+      await this._enterFullscreen();
       return;
     }
     if (document.fullscreenElement || document.webkitFullscreenElement) {
@@ -1310,6 +1390,17 @@ export class CgcNvrPlayer extends LitElement {
 
   /** The player's own full screen (turned to landscape); false when the browser doesn't allow it here. */
   async _enterFullscreen() {
+    if (this.docfs) {
+      // Cover the window at once (so it is full screen even where the document can't be, or was refused), then
+      // the document's full screen for the system bars; already on (a swipe handed it over): keep it.
+      clearTimeout(handoff.timer);
+      handoff.until = 0;
+      handoff.owner = this;
+      this._setPseudo(true);
+      this._docFsOn = await enterDocFs();
+      if (this._docFsOn && this._pseudo) this._lockOrientation();
+      return true;
+    }
     const el = this.renderRoot?.querySelector(".nvr");
     const request = el?.requestFullscreen || el?.webkitRequestFullscreen;
     if (!request) return false;
@@ -1331,6 +1422,15 @@ export class CgcNvrPlayer extends LitElement {
   }
 
   _fsChanged() {
+    if (this.docfs) {
+      // The document left full screen (Back, Esc): so does the player.
+      if (this._pseudo && this._docFsOn && !docFsEl()) {
+        this._docFsOn = false;
+        if (handoff.owner === this) handoff.owner = null;
+        this._setPseudo(false);
+      }
+      return;
+    }
     // The document only sees the outermost shadow host (in Home Assistant, <home-assistant>): ask our own root,
     // or (engines without ShadowRoot.fullscreenElement) whether we asked for it.
     const any = document.fullscreenElement || document.webkitFullscreenElement;
@@ -1370,12 +1470,25 @@ export class CgcNvrPlayer extends LitElement {
     );
   }
 
-  _leftFullscreen() {
-    this._fullscreen = false;
+  _lockOrientation() {
+    screen.orientation
+      ?.lock?.(this._portraitContent() ? "portrait" : "landscape")
+      .then(() => {
+        this._locked = true;
+      })
+      .catch(() => {});
+  }
+
+  _stopMotion() {
     if (this._motionOn) {
       this._motionOn = false;
       window.removeEventListener("devicemotion", this._onMotion);
     }
+  }
+
+  _leftFullscreen() {
+    this._fullscreen = false;
+    this._stopMotion();
     if (this._locked) {
       this._locked = false;
       try {

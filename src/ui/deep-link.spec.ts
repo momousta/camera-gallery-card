@@ -778,3 +778,32 @@ describe("owner 10-20 14:29: the moment a link came for (the timeline opens came
     expect(card._nvr).toMatchObject({ src: ITEMS[1]!.src, time: ITEMS[1]!.dtMs });
   });
 });
+
+describe("owner 10-20 21:46: a swipe in full screen stays full screen", () => {
+  it("removing the last camera page's card doesn't end the document's full screen (the player's hand-off)", async () => {
+    const exit = vi.fn(async () => {});
+    Object.defineProperty(document, "fullscreenElement", {
+      configurable: true,
+      get: () => document.documentElement,
+    });
+    Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exit });
+    try {
+      const card = makeCard({});
+      await show(card);
+      card.remove();
+      expect(exit).not.toHaveBeenCalled();
+      // Its own full screen (an element of the card) still ends with it.
+      Object.defineProperty(document, "fullscreenElement", {
+        configurable: true,
+        get: () => document.body,
+      });
+      const other = makeCard({});
+      await show(other);
+      other.remove();
+      expect(exit).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (document as any).fullscreenElement;
+      delete (document as any).exitFullscreen;
+    }
+  });
+});
