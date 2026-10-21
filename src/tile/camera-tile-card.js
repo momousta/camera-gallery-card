@@ -604,8 +604,11 @@ const tileStyles = css`
   ha-card.fs {
     overflow: visible;
   }
+  /* Its own stacking context: the buttons' z-index must not lift them over Home Assistant's header when the
+     page scrolls the tile under it (full screen sets its own, above everything). */
   .tile {
     position: relative;
+    isolation: isolate;
     width: 100%;
     background: #000;
     border-radius: var(--ha-card-border-radius, 12px);
