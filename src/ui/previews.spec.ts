@@ -481,3 +481,80 @@ describe("owner 10-20 16:17: auto-play all plays the day forward, as a time-laps
     expect(btn().getAttribute("aria-pressed")).toBe("false");
   });
 });
+
+describe("owner 10-21: the camera's floodlight and siren over the picture", () => {
+  const states = (light = "off") => ({
+    "light.cam_floodlight": { entity_id: "light.cam_floodlight", state: light, attributes: {} },
+    "siren.cam_siren": { entity_id: "siren.cam_siren", state: "unknown", attributes: {} },
+  });
+  async function withActions(light = "off", extra: Record<string, unknown> = {}) {
+    const card = await renderCard({
+      floodlight_entity: "light.cam_floodlight",
+      siren_entity: "siren.cam_siren",
+      nvr_channel: 7,
+      ...extra,
+    });
+    const calls: any[] = [];
+    card._hass = {
+      ...card._hass,
+      states: states(light),
+      callService: vi.fn(async (...a: any[]) => calls.push(a)),
+    };
+    card.requestUpdate();
+    await card.updateComplete;
+    return { card, calls };
+  }
+  const btn = (root: any, id: string) => root.querySelector(`.cam-acts .cam-act.${id}`);
+
+  it("no buttons without the entities; with them, bottom left over the picture", async () => {
+    const plain = await renderCard({});
+    expect(q(plain, ".cam-acts")).toBeNull();
+    const { card } = await withActions();
+    expect(btn(card.shadowRoot, "floodlight")).not.toBeNull();
+    expect(btn(card.shadowRoot, "siren")).not.toBeNull();
+  });
+
+  it("the floodlight toggles, and shows when it's on", async () => {
+    const { card, calls } = await withActions("off");
+    btn(card.shadowRoot, "floodlight").click();
+    expect(calls[0]).toEqual(["light", "turn_on", { entity_id: "light.cam_floodlight" }]);
+    card._hass = { ...card._hass, states: states("on") };
+    card.requestUpdate();
+    await card.updateComplete;
+    expect(btn(card.shadowRoot, "floodlight").classList.contains("on")).toBe(true);
+    btn(card.shadowRoot, "floodlight").click();
+    expect(calls[1]).toEqual(["light", "turn_off", { entity_id: "light.cam_floodlight" }]);
+  });
+
+  it("the siren needs a second tap within 3 s, sounds siren_duration s, and a tap stops it", async () => {
+    const { card, calls } = await withActions("off", { siren_duration: 15 });
+    btn(card.shadowRoot, "siren").click();
+    await card.updateComplete;
+    expect(calls).toEqual([]); // armed only
+    expect(btn(card.shadowRoot, "siren").textContent).toContain("Tap again");
+    await vi.advanceTimersByTimeAsync(3100);
+    await card.updateComplete;
+    expect(btn(card.shadowRoot, "siren").classList.contains("armed")).toBe(false); // the arm lapsed
+    btn(card.shadowRoot, "siren").click();
+    btn(card.shadowRoot, "siren").click();
+    await card.updateComplete;
+    expect(calls[0]).toEqual(["siren", "turn_on", { entity_id: "siren.cam_siren", duration: 15 }]);
+    expect(btn(card.shadowRoot, "siren").classList.contains("on")).toBe(true);
+    btn(card.shadowRoot, "siren").click();
+    expect(calls[1]).toEqual(["siren", "turn_off", { entity_id: "siren.cam_siren" }]);
+    await card.updateComplete;
+    expect(btn(card.shadowRoot, "siren").classList.contains("on")).toBe(false);
+  });
+
+  it("the NVR player shows the same buttons, and its presses act on the camera", async () => {
+    const { card, calls } = await withActions();
+    q(card, ".pfs-btn").click(); // a picture in the player
+    await card.updateComplete;
+    const p = q(card, ".preview cgc-nvr-player");
+    await p.updateComplete;
+    expect(q(card, ".preview > .cam-acts")).toBeNull(); // the player has them now
+    expect(p.actions.map((a: any) => a.id)).toEqual(["floodlight", "siren"]);
+    btn(p.shadowRoot, "floodlight").click();
+    expect(calls[0]).toEqual(["light", "turn_on", { entity_id: "light.cam_floodlight" }]);
+  });
+});

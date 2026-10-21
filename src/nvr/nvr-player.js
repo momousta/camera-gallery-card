@@ -10,6 +10,8 @@
  *   quiet (load unseen: no progress, no error; the player shows itself once the video plays),
  *   label (the camera's name for saved files; without it the add-on uses the NVR's channel name),
  *   fullscreen (start in full screen: the viewer swiped here from a full-screen player)
+ *   actions (the camera's floodlight / siren buttons, see ui/camera-actions: drawn at the bottom left, with the
+ *   other controls; a press fires nvr-action)
  *   docfs (the host moves between pages while full screen, the gallery's camera swipes: full screen is the
  *   player covering the window, with the whole document full screen underneath, so it survives the page change and
  *   the next camera's player takes it over without asking again; an element's own full screen ends with the page)
@@ -18,6 +20,7 @@
  * Events (bubbling, composed):
  *   nvr-close: the viewer asked to go back to the snapshots; { quiet: true } when a quiet start failed
  *   nvr-stream: { stream } the viewer switched between Low and High
+ *   nvr-action: { id } a camera action button was pressed (the host calls the service)
  *   nvr-reveal: a quiet player started playing and showed itself
  *   nvr-fullscreen: { fullscreen, pseudo } the player went in or out of full screen (pseudo: the browser has no
  *     element full screen, an iPhone: the player covers the window instead, and its host must not clip it)
@@ -57,6 +60,7 @@ import {
   playbackMode,
   progressDetail,
 } from "./nvr-api";
+import { cameraActionStyles, renderCameraActions } from "../ui/camera-actions";
 import { nvrPlayerStyles } from "./nvr-player-styles";
 
 const TAG = "cgc-nvr-player";
@@ -272,6 +276,7 @@ export class CgcNvrPlayer extends LitElement {
       fullscreen: { type: Boolean },
       still: { type: String },
       docfs: { type: Boolean },
+      actions: { attribute: false },
       _phase: { state: true },
       _status: { state: true },
       _error: { state: true },
@@ -299,7 +304,7 @@ export class CgcNvrPlayer extends LitElement {
   }
 
   static get styles() {
-    return nvrPlayerStyles;
+    return [nvrPlayerStyles, cameraActionStyles];
   }
 
   constructor() {
@@ -316,6 +321,7 @@ export class CgcNvrPlayer extends LitElement {
     this.fullscreen = false;
     this.still = "";
     this.docfs = false;
+    this.actions = [];
     this._docFsOn = false; // the document is full screen for this player
     this._streaming = false; // Low / High was asked for over a still: it plays the recording now
     this._stillPortrait = false;
@@ -1615,6 +1621,16 @@ export class CgcNvrPlayer extends LitElement {
                   <span class="nvr-gap"></span>
                   ${this._renderControls()}
                 </div>`}
+            ${renderCameraActions(
+              this.actions,
+              (id) => {
+                this._showUi();
+                this.dispatchEvent(
+                  new CustomEvent("nvr-action", { detail: { id }, bubbles: true, composed: true })
+                );
+              },
+              { visible: shown, cls: this._phase === "playing" ? "above-ctl" : "" }
+            )}
             ${this._phase === "playing"
               ? this._renderTransport(locale)
               : html`<div class="nvr-ctl nvr-ctl-min">${this._renderFullscreen()}</div>`}

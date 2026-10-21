@@ -44,6 +44,13 @@ import { sidecarFolder, sidecarUrl } from "./data/sidecar";
 import { planPreload, ThumbPreloader } from "./data/preload";
 import { monthOf } from "./data/calendar";
 import { OutsidePress, renderCalendarPicker } from "./ui/calendar-picker";
+import {
+  SIREN_ARM_MS,
+  SIREN_DEFAULT_S,
+  cameraActionStyles,
+  cameraActions,
+  renderCameraActions,
+} from "./ui/camera-actions";
 import { calendarPickerStyles } from "./ui/calendar-picker-styles";
 // BL-007: the multi-camera timeline card ships in the same bundle (<camera-timeline-card>).
 import "./timeline/timeline-card.js";
@@ -921,6 +928,8 @@ class CameraGalleryCard extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._calOutside?.stop();
+    clearTimeout(this._sirenTimer);
+    this._siren = {};
     this._stopAutoplayAll();
 
     document.removeEventListener("fullscreenchange", this._onFullscreenChange);
@@ -1030,7 +1039,8 @@ class CameraGalleryCard extends LitElement {
     const cameraIds = getLiveCameraEntityIds(this.config);
 
     const menuIds = (this.config?.menu_buttons ?? []).map(b => b.entity).filter(Boolean);
-    const watchIds = [...sensorIds, ...cameraIds, ...menuIds];
+    const actionIds = [this.config?.floodlight_entity, this.config?.siren_entity].filter(Boolean);
+    const watchIds = [...sensorIds, ...cameraIds, ...menuIds, ...actionIds];
 
     if (
       watchIds.length > 0 &&
@@ -3804,6 +3814,63 @@ class CameraGalleryCard extends LitElement {
   /** The moment a link brought the viewer for, while `src` is the item it selected; else null. */
   _momentOf(src) {
     return src && this._moment?.src === src ? this._moment.time : null;
+  }
+
+  // ─── Owner fork: the camera's floodlight and siren (ui/camera-actions) ─────────
+
+  /** This camera's action buttons (floodlight_entity, siren_entity), for the gallery and the player alike. */
+  _cameraActionList() {
+    return cameraActions(
+      this._hass?.states,
+      { floodlight: this.config?.floodlight_entity, siren: this.config?.siren_entity },
+      this._siren || {}
+    );
+  }
+
+  /** A press: the floodlight toggles; the siren arms on a first tap, sounds on a second within SIREN_ARM_MS (for
+   * siren_duration s), and a tap while it sounds stops it. */
+  _onCameraAction(id) {
+    const hass = this._hass;
+    if (!hass) return;
+    const fail = (what) => (err) =>
+      this._showSnapshotToast(`${what}: ${err?.message || "the camera didn't answer"}`);
+    if (id === "floodlight") {
+      const e = this.config?.floodlight_entity;
+      const on = hass.states?.[e]?.state === "on";
+      Promise.resolve(hass.callService("light", on ? "turn_off" : "turn_on", { entity_id: e })).catch(
+        fail("Floodlight")
+      );
+    } else if (id === "siren") {
+      const e = this.config?.siren_entity;
+      const now = Date.now();
+      const st = this._siren || {};
+      clearTimeout(this._sirenTimer);
+      const later = (ms) => {
+        this._sirenTimer = setTimeout(() => {
+          this._siren = {};
+          this.requestUpdate();
+        }, ms);
+      };
+      if ((st.until || 0) > now || hass.states?.[e]?.state === "on") {
+        this._siren = {};
+        Promise.resolve(hass.callService("siren", "turn_off", { entity_id: e })).catch(fail("Siren"));
+      } else if ((st.armedUntil || 0) > now) {
+        const secs = Number(this.config?.siren_duration) || SIREN_DEFAULT_S;
+        this._siren = { until: now + secs * 1000 };
+        later(secs * 1000 + 50);
+        Promise.resolve(
+          hass.callService("siren", "turn_on", { entity_id: e, duration: secs })
+        ).catch((err) => {
+          this._siren = {};
+          fail("Siren")(err);
+        });
+      } else {
+        this._siren = { armedUntil: now + SIREN_ARM_MS };
+        later(SIREN_ARM_MS + 50);
+      }
+    }
+    this._showPills();
+    this.requestUpdate();
   }
 
   /** BL-008: the configured NVR channel of this camera, or null (no Low / High buttons). */
@@ -6594,6 +6661,8 @@ class CameraGalleryCard extends LitElement {
 
     // BL-008: the NVR player belongs to the item it was started on; browsing away (or going live) closes it.
     const nvrOn = !!this._nvr && !isLive && this._nvr.src === selected;
+    // Owner fork: the camera's floodlight / siren buttons (bottom left; the player draws its own).
+    const camActions = this._cameraActionList();
     // Owner fork: the full screen button at the bottom right of the picture, as in the NVR player.
     const fsCornerOn =
       !isLive &&
@@ -6683,6 +6752,8 @@ class CameraGalleryCard extends LitElement {
                   .fullscreen=${!!this._nvr.fullscreen}
                   .still=${this._nvr.still || ""}
                   .docfs=${true}
+                  .actions=${camActions}
+                  @nvr-action=${(e) => this._onCameraAction(e.detail?.id)}
                   .label=${this._cameraLabel()}
                   @nvr-close=${() => this._stopNvr()}
                   @nvr-fullscreen=${(e) => this._onNvrFullscreen(e)}
@@ -6750,6 +6821,11 @@ class CameraGalleryCard extends LitElement {
                 <ha-icon icon="mdi:fullscreen"></ha-icon>
               </button>
             ` : html``}
+            ${!nvrOn && (isLive || !noResultsForFilter)
+              ? renderCameraActions(camActions, (id) => this._onCameraAction(id), {
+                  visible: !!(this._pillsVisible || this.config?.persistent_controls),
+                })
+              : html``}
             ${!isLive && selectedIsVideo && selectedHasUrl && !noResultsForFilter ? (() => {
               const dur = this._galleryDuration || 0;
               const pct = dur > 0 ? Math.max(0, Math.min(100, (this._galleryCurrentTime / dur) * 100)) : 0;
@@ -7357,7 +7433,7 @@ class CameraGalleryCard extends LitElement {
   }
 
   static get styles() {
-    return [cardStyles, calendarPickerStyles];
+    return [cardStyles, calendarPickerStyles, cameraActionStyles];
   }
 }
 

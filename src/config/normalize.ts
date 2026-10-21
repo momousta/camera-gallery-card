@@ -215,6 +215,9 @@ export interface InputConfig {
   swipe_cameras?: { gallery_id?: string; navigation_path?: string; name?: string }[];
   gallery_aspect_ratio?: string;
   gallery_fit?: "cover" | "contain";
+  floodlight_entity?: string;
+  siren_entity?: string;
+  siren_duration?: number;
   pill_size?: number;
   row_gap?: number;
   card_height?: number;

@@ -549,6 +549,11 @@ export const cameraGalleryCardConfigStruct = type({
   // (thumbnails and live keep object_fit). For cameras mounted on their side, whose pictures stand portrait.
   gallery_aspect_ratio: optional(string()),
   gallery_fit: optional(enums(["cover", "contain"])),
+  // Owner fork: the camera's floodlight (a light) and siren (a siren) buttons over the picture; the siren sounds
+  // this many seconds (it needs two taps).
+  floodlight_entity: optional(string()),
+  siren_entity: optional(string()),
+  siren_duration: optional(intInRange(1, 300)),
   pill_size: defaulted(intInRange(PILL_SIZE_MIN, PILL_SIZE_MAX), PILL_SIZE_DEFAULT),
   row_gap: defaulted(intInRange(ROW_GAP_MIN, ROW_GAP_MAX), ROW_GAP_DEFAULT),
   card_height: defaulted(intInRange(CARD_HEIGHT_MIN, CARD_HEIGHT_MAX), CARD_HEIGHT_DEFAULT),

@@ -315,6 +315,10 @@ export const nvrPlayerStyles = css`
   .nvr-ui.shown .nvr-big {
     pointer-events: auto;
   }
+  /* The camera's floodlight / siren buttons (ui/camera-actions): bottom left, above the seek bar while it plays. */
+  .cam-acts.above-ctl {
+    bottom: calc(var(--nvr-bar-h) + 4px);
+  }
   .nvr-bar,
   .nvr-ctl {
     position: absolute;

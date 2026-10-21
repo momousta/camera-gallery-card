@@ -229,6 +229,12 @@ it plays on when full screen ends; otherwise leaving full screen returns to the 
 the player covers the window instead. Video clips keep the gallery's own full screen, and `fullscreen_zoom` no
 longer applies to pictures.
 
+**Floodlight and siren** (`floodlight_entity`, `siren_entity`): buttons at the bottom left of the picture,
+opposite the full screen button and shown and hidden with the other controls, over everything the card shows:
+snapshots, GIFs, clips, live, and the NVR player (inline and full screen, above its seek bar), so the cars page's
+player could carry them too. The floodlight lights up yellow while on. The siren takes two taps (a stray tap
+doesn't sound it), pulses red while it sounds, and stops on a tap.
+
 **Cameras mounted sideways** (a portrait picture): the NVR records the sensor's landscape frame. The add-on's
 `rotate_channels` option (NVR Playback 0.4.1+) says how far to turn a channel. The player then shows it upright,
 in a portrait box, and keeps full screen portrait. Saved snapshots are upright, and saved clips carry the turn,
@@ -432,6 +438,9 @@ data:
 | `swipe_cameras` | The cameras in order, as the timeline card's `cameras` (`gallery_id`, `navigation_path`, `name`): a swipe on the picture opens the next / previous one at the same moment. `name` names saved files. This card must be in the list (its `url_id`) |
 | `gallery_aspect_ratio` | The viewer's shape in the gallery only (not live), as `W:H`, e.g. `"3:4"` for a camera mounted sideways (default: `aspect_ratio`) |
 | `gallery_fit` | `cover` or `contain` for the gallery's snapshots and GIFs only; thumbnails and live keep `object_fit` (default: `object_fit`) |
+| `floodlight_entity` | Owner fork: the camera's floodlight (`light.*`): a button at the picture's bottom left toggles it, over snapshots, GIFs, clips, live and NVR recordings (also full screen) |
+| `siren_entity` | Owner fork: the camera's siren (`siren.*`): a button next to it; the first tap arms it ("Tap again", 3 s), the second sounds it, a tap while it sounds stops it |
+| `siren_duration` | Seconds the siren sounds (1–300, default 10) |
 | `gallery_chevrons_enabled` | The previous / next arrows over the gallery's picture, also in its full screen (default `true`) |
 | `gallery_pills` | Per-pill settings, e.g. `index_counter: {enabled: false}` hides the "3 / 40" count |
 | `bar_position` | Preview timestamp bar position |
