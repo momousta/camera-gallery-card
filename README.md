@@ -245,6 +245,15 @@ live stream, Home Assistant's own player), `name`, `navigation_path`, `aspect_ra
 side), `fit` (`contain` default, or `cover`), `live: false` (a still refreshed every 10 s, for a battery doorbell),
 `floodlight_entity`, `siren_entity`, `siren_duration`, `detections` (`entity`, `label`, `icon`).
 
+**A picture at once while live connects** (owner fork; the tiles and the gallery's live view): Home Assistant's
+player is black until the stream's first keyframe. A poster covers that wait and fades when the first frame shows.
+It is the last frame this phone saw of the camera: the playing video is copied every 30 s, and when the view closes,
+into a small JPEG (≤960 px) in `localStorage`, already turned like the stream. A kept frame is used for up to 6 h.
+When none is kept, or it is over 10 min old, a snapshot sized to the box loads as well
+(`camera_proxy?width=…&height=…`, ~90 KB instead of a 1–2 MB full frame). Snapshots come back unturned, so the
+poster applies the camera's orientation setting (`camera/get_prefs`) the way go2rtc turns the stream. Nothing to
+configure.
+
 **Cameras mounted sideways** (a portrait picture): the NVR records the sensor's landscape frame. The add-on's
 `rotate_channels` option (NVR Playback 0.4.1+) says how far to turn a channel. The player then shows it upright,
 in a portrait box, and keeps full screen portrait. Saved snapshots are upright, and saved clips carry the turn,

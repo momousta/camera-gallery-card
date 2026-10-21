@@ -9,7 +9,7 @@ owner's "push everything".
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything").
 
-- **Now:** build `3.1.0-owner.19` (`?v=48f61118555c`) since 2026-10-21 12:40: NVR recordings from an exact moment.
+- **Now:** build `3.1.0-owner.20` (`?v=b31e4033e8a8`) since 2026-10-21 13:52: NVR recordings from an exact moment.
   Needs the **NVR Playback** add-on `/addons/nvr_playback`, 0.2.1+ (0.4.0+ to save snapshots and clips, 0.4.1+ for
   cameras mounted sideways). Check the resource with `node deploy/ha-deploy.mjs status`. BL-008 so far:
   - Low / High; the strip coming to rest plays Low quietly;
@@ -40,10 +40,14 @@ owner's "push everything".
     bottom left, in the gallery and the player alike (`ui/camera-actions.js`).
   - owner.19: `camera-tile-card`, the Cameras page's live tiles in the same design (the same action buttons, full
     screen that swipes between tiles); the gallery's buttons now run on the shared `CameraActionController`.
+  - owner.20: a picture at once while live connects (`ui/live-poster.ts`, the tiles and the gallery's live view):
+    the last frame the phone saw, else a sized snapshot, turned like the stream; it fades at the first frame. The
+    tiles' buttons no longer float over HA's header when scrolled under it.
   - The cars page (the Vehicle Intelligence card's Recording button) creates the same `<cgc-nvr-player>`, so every
     player change reaches it with nothing to change there.
 - **Earlier builds**, each saved in `/share/backups/bl002/<build>-<v>/`. To go back to one, copy both files into
   `dist/` and run `switch`.
+  - `3.1.0-owner.19` (`?v=48f61118555c`, camera tiles on the Cameras page): `owner.19-48f61118555c/`.
   - `3.1.0-owner.18` (`?v=736ca029ebe5`, floodlight and siren buttons): `owner.18-736ca029ebe5/`.
   - `3.1.0-owner.17` (`?v=f6898cd586e8`, swipes keep full screen): `owner.17-f6898cd586e8/`.
   - `3.1.0-owner.16` (`?v=46b2a8af7c40`, pictures full screen in the player): `owner.16-46b2a8af7c40/`.
@@ -357,6 +361,21 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
     a swipe → Front, full screen, one request; its exit button left it; the siren armed on one tap.
   - The doorbell's 10 s refresh blanked its still while the next loaded; it now swaps once loaded.
   - Regression: `swipevariants` on Front's gallery (all six moved).
+- **owner.20** (10-21 13:52), the Cameras page and two camera pages, Pixel 6 viewport (`--script poster`: every
+  50 ms from document start, per live player, the time to the poster and to the first video frame, and the samples
+  that were black):
+  - **The owner's ask:** "both": keep the sub streams warm, and show the latest picture at once while live connects.
+  - **A return to the page** (all 7 tiles remounted): the kept frame at 0 ms on every tile, **0 black samples**;
+    video at 0.9–1.9 s (Left / Right Front 5.6–6.5 s, see below). The turned tiles' kept frames are portrait
+    (512×896) and need no turn.
+  - **A first visit (nothing kept):** the NVR answers snapshots one at a time (7 at once: 1.4 s for the first,
+    8.8 s for the last), so most video arrives first; Front Right's poster at 0.7–1.3 s, the turned ones' at 4–7 s.
+  - **Gallery live** (Front Right, Left Front `_main`): poster at 0.7 / 1.1 s, Left Front's turned 90° and cropped
+    like its stream (`cover`). HEVC doesn't decode in headless Chromium, so the poster stayed (the right fallback).
+  - Snapshot sizes: `width` + `height` → 1128×628, 91–285 KB (was 4512×2512, 1–2 MB).
+  - Regression: `tiles` (7 playing, full screen + swipe with one request, exit, siren armed).
+  - Found while checking: the tiles' buttons drew over HA's header when the page scrolled them under it (since
+    owner.18); `.tile` now isolates its stacking.
 - **Not checked:** real phones, iOS Safari (native HLS, HEVC), live WebRTC and talkback (WebRTC doesn't run in
   headless Chromium). The HA app's WebView was emulated by the portrait screen without an orientation lock.
 
@@ -426,6 +445,9 @@ Harness and results: `/share/dev/bl002-work`.
 | `build: fork version 3.1.0-owner.18`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 | `feat: camera-tile-card, the Cameras page's live tiles in the gallery's design`                                       | `src/tile/camera-tile-card.js`: HA's live player (`ha-camera-stream`, loaded via a hidden picture card if needed), whole picture (`injectLiveFillStyle(…, "contain")`), name, detection chips, the shared action buttons (`CameraActionController`, now also the gallery's), full screen over the document's (turn, hide, zoom, swipe to the next tile with no second request), tap → `navigation_path` with HA's `from`; `live: false` refreshes a still every 10 s (swapped once loaded)                                                                                                                                                                                                                                                        | Owner 10-21: "fix the main camera view to make it consistent with what we built, so everything is in harmony"                                                                                                                              |
 | `build: fork version 3.1.0-owner.19`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
+| `feat: a picture at once while live connects`                                                                         | `src/ui/live-poster.ts`, used by `camera-tile-card` and the gallery's single live view: the last frame the phone saw (kept from the playing video every 30 s and on close, ≤960 px JPEG in `localStorage`, 6 h), else a snapshot sized to the box (`width` + `height`, HA scales it), turned by the camera's orientation (`camera/get_prefs`) like go2rtc turns the stream; it fades at the player's first frame                                                                                                                                                                                                                                                                                                                                  | Owner 10-21: "both" (keep the streams warm; show the latest snapshot at once while live connects)                                                                                                                                          |
+| `fix(tile): the buttons stay under HA's header`                                                                       | `.tile` isolates its stacking, so its buttons (z-index) no longer draw over the header when the page scrolls the tile under it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Found in the owner.20 checks                                                                                                                                                                                                               |
+| `build: fork version 3.1.0-owner.20`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 
 ## Build and test
 
