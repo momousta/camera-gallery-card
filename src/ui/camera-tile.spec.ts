@@ -99,6 +99,21 @@ describe("<camera-tile-card>", () => {
     expect($(el, ".tile").getAttribute("style")).toContain("aspect-ratio:9/16");
   });
 
+  it("shows the camera's snapshot over the stream while it connects", async () => {
+    const states = {
+      ...STATES,
+      "camera.fr_sub": st("camera.fr_sub", "streaming", {
+        entity_picture: "/api/camera_proxy/camera.fr_sub?token=t",
+      }),
+    };
+    const { el } = await tile({}, states);
+    const wrap = $(el, ".stream .cgc-live-poster");
+    expect(wrap).not.toBeNull();
+    expect(wrap.querySelector("img").style.objectFit).toBe("contain");
+    el.remove();
+    expect($(el, ".stream .cgc-live-poster")).toBeNull();
+  });
+
   it("the gallery's floodlight and siren buttons, with the same two-tap siren", async () => {
     const { el, calls } = await tile();
     $(el, ".cam-act.floodlight").click();

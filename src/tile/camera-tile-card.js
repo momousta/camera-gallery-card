@@ -33,6 +33,7 @@ import {
   renderCameraActions,
 } from "../ui/camera-actions";
 import { injectLiveFillStyle } from "../ui/live-fill-style";
+import { attachLivePoster } from "../ui/live-poster";
 import { portraitScreen, turnFromMotion, unturn } from "../util/landscape";
 
 const TAG = "camera-tile-card";
@@ -114,6 +115,7 @@ export class CameraTileCard extends LitElement {
     this._zoom = { s: 1, x: 0, y: 0 };
     this._still = "";
     this._player = null;
+    this._posterStop = null;
     this._ptrs = new Map();
     this._gest = null;
     this._lastTap = null;
@@ -188,6 +190,8 @@ export class CameraTileCard extends LitElement {
       }
       this._leave();
     }
+    this._posterStop?.();
+    this._posterStop = null;
     // The stream stops with the page (HA's player releases it when removed).
     this._player?.remove();
     this._player = null;
@@ -220,8 +224,12 @@ export class CameraTileCard extends LitElement {
       p.controls = false;
       p.style.cssText = "display:block;width:100%;height:100%;margin:0;";
       host.replaceChildren(p);
-      injectLiveFillStyle(p, this.config.fit === "cover" ? "cover" : "contain");
+      const fit = this.config.fit === "cover" ? "cover" : "contain";
+      injectLiveFillStyle(p, fit);
       this._player = p;
+      // The camera's picture at once; it fades when the stream shows its first frame.
+      this._posterStop?.();
+      this._posterStop = attachLivePoster(host, p, this._hass, this.config.entity, fit);
     } finally {
       this._mounting = false;
     }

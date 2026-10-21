@@ -9,6 +9,7 @@ import jsYaml from "js-yaml";
 import { cardStyles } from "./styles";
 import { STYLE_SECTIONS } from "./config/styling-config";
 import { injectLiveFillStyle } from "./ui/live-fill-style";
+import { attachLivePoster } from "./ui/live-poster";
 import {
   dayKeyFromMs,
   dtKeyFromMs,
@@ -2991,6 +2992,11 @@ class CameraGalleryCard extends LitElement {
     if (isNewMount) {
       card.hass = this._hass;
       injectLiveFillStyle(card);
+      // Owner fork: the camera's picture at once while the stream connects (shared with the Cameras page's tiles).
+      this._livePosterStop?.();
+      this._livePosterStop = isStreamUrl
+        ? null
+        : attachLivePoster(host, card, this._hass, this._getEffectiveLiveCamera(), "cover");
       this._liveMuted = this.config?.live_auto_muted !== false;
       this._syncLiveMuted();
     }
@@ -3008,6 +3014,8 @@ class CameraGalleryCard extends LitElement {
   // the <video>, and `display:none` doesn't pause playback either — so a card
   // left mounted in media mode keeps streaming and audible (issue #109).
   _teardownLiveView() {
+    this._livePosterStop?.();
+    this._livePosterStop = null;
     if (this._autoAspectObs) {
       clearInterval(this._autoAspectObs);
       this._autoAspectObs = null;
