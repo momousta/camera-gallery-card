@@ -807,3 +807,119 @@ describe("owner 10-20 21:46: a swipe in full screen stays full screen", () => {
     }
   });
 });
+
+describe("live in the NVR player (owner 10-22)", () => {
+  const CAMERAS = [
+    {
+      entity: "sensor.filetrack_front_right",
+      name: "Front Right",
+      navigation_path: "/main-dashboard/front-right",
+      gallery_id: "front_right",
+      nvr_channel: 7,
+    },
+    {
+      entity: "sensor.filetrack_camera1",
+      name: "Front",
+      navigation_path: "/main-dashboard/camera1",
+      gallery_id: "camera1",
+      nvr_channel: 6,
+    },
+  ];
+  const cam = (entity_id: string) => ({ entity_id, state: "idle", attributes: {} });
+  async function showLive(card: any, both = true) {
+    card.hass = {
+      states: {
+        "camera.front_right_main": cam("camera.front_right_main"),
+        ...(both ? { "camera.front_right_sub": cam("camera.front_right_sub") } : {}),
+      },
+      locale: { language: "en-US" },
+    };
+    document.body.append(card);
+    await card.updateComplete;
+    await vi.advanceTimersByTimeAsync(50);
+    await card.updateComplete;
+  }
+  const player = (card: any) =>
+    card.shadowRoot.querySelector(".preview cgc-nvr-player.live-player");
+  const fire = (el: any, name: string, detail: unknown) => {
+    const ev = new CustomEvent(name, { detail, bubbles: true, composed: true, cancelable: true });
+    el.dispatchEvent(ev);
+    return ev;
+  };
+
+  it("the live view is the player's: its controls over the card's own stream", async () => {
+    const card = makeCard({ nvr_channel: 7 });
+    await showLive(card);
+    const p = player(card);
+    expect(p).not.toBeNull();
+    expect(p.live).toBe(true);
+    expect(p.liveStreams).toEqual(["sub", "main"]);
+    expect(p.stream).toBe("main"); // as configured (camera.front_right_main)
+    expect(p.channel).toBe(7);
+    expect(p.docfs).toBe(true);
+    expect(p.querySelector("#live-card-host")).not.toBeNull(); // the stream stays the card's
+    expect(card.shadowRoot.querySelector(".live-controls-bar")).toBeNull(); // the old pills are gone
+  });
+
+  it("a camera with one stream: no Low / High", async () => {
+    const card = makeCard();
+    await showLive(card, false);
+    expect(player(card).liveStreams).toEqual([]);
+  });
+
+  it("Low / High switches the card's stream to the camera's other entity; mute is the card's", async () => {
+    const card = makeCard();
+    await showLive(card);
+    fire(player(card), "nvr-stream", { stream: "sub", live: true });
+    await card.updateComplete;
+    expect(card._getEffectiveLiveCamera()).toBe("camera.front_right_sub");
+    expect(card._teardownLiveView).toHaveBeenCalled();
+    expect(player(card).stream).toBe("sub");
+    const muted = card._liveMuted;
+    fire(player(card), "nvr-mute", { muted: !muted });
+    await card.updateComplete;
+    expect(card._liveMuted).toBe(!muted);
+    expect(player(card).liveMuted).toBe(!muted);
+  });
+
+  it("a swipe opens the next camera's live view, in the same quality and full screen", async () => {
+    const moves: string[] = [];
+    const onMove = () => moves.push(window.location.pathname + window.location.search);
+    window.addEventListener("location-changed", onMove);
+    try {
+      const card = makeCard({ swipe_cameras: CAMERAS, nvr_channel: 7 });
+      await showLive(card);
+      const ev = fire(player(card), "nvr-swipe", {
+        dir: 1,
+        time: Date.now(),
+        stream: "main",
+        fullscreen: true,
+        live: true,
+      });
+      expect(ev.defaultPrevented).toBe(true);
+      expect(moves[0]!.startsWith("/main-dashboard/camera1?")).toBe(true);
+      expect(Object.fromEntries(new URL(moves[0]!, "http://x").searchParams)).toEqual({
+        cgc_id: "camera1",
+        cgc_view: "live",
+        cgc_live: "main",
+        cgc_fs: "1",
+      });
+    } finally {
+      window.removeEventListener("location-changed", onMove);
+    }
+  });
+
+  it("arriving by such a swipe: that quality, and the player takes the full screen over", async () => {
+    const Player: any = customElements.get("cgc-nvr-player");
+    const enter = vi.spyOn(Player.prototype, "_enterFullscreen").mockResolvedValue(true);
+    link({ cgc_id: "front_right", cgc_view: "live", cgc_live: "sub", cgc_fs: "1" });
+    const card = makeCard();
+    await showLive(card);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(card._viewMode).toBe("live");
+    expect(card._getEffectiveLiveCamera()).toBe("camera.front_right_sub");
+    expect(player(card).stream).toBe("sub");
+    expect(enter).toHaveBeenCalledTimes(1);
+    expect(window.location.search).toBe(""); // used once
+  });
+});

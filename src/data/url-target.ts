@@ -43,6 +43,7 @@ export const DEEP_LINK_PARAMS = [
   "cgc_near",
   "cgc_nvr",
   "cgc_fs",
+  "cgc_live",
 ] as const;
 
 const MIN_MS = Date.UTC(2000, 0, 1);

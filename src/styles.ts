@@ -302,6 +302,11 @@ export const cardStyles = css`
     opacity: 0.6;
   }
 
+  /* Owner fork: the live view inside the player (cgc-nvr-player live): its picture, under the player's controls. */
+  .live-in-player {
+    position: absolute;
+    inset: 0;
+  }
   .live-card-host {
     position: absolute;
     inset: 0;

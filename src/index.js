@@ -497,6 +497,11 @@ class CameraGalleryCard extends LitElement {
     this._thumbMenuOpenedAt = 0;
     this._viewMode = "media";
     this._liveSelectedCamera = "";
+    // Owner fork: the live player's Low / High ("sub" | "main", null: as configured), a swipe's full screen to
+    // take over on arrival, and a mute to keep across a Low / High switch.
+    this._liveQuality = null;
+    this._liveArriveFs = false;
+    this._liveKeepMute = false;
     // One-shot: set when a `cgc_view=gallery` deep-link resolves at first
     // hass, consumed the first time the item list actually populates (see
     // `updated()`) so the newest clip opens regardless of thumb_sort_order.
@@ -1996,6 +2001,13 @@ class CameraGalleryCard extends LitElement {
   }
 
   _getEffectiveLiveCamera() {
+    const base = this._baseLiveCamera();
+    // Owner fork: Low / High in the live player picks the camera's sub or main stream entity.
+    const sib = this._liveQuality ? this._liveSiblings(base) : null;
+    return sib ? sib[this._liveQuality] : base;
+  }
+
+  _baseLiveCamera() {
     const selected = String(this._liveSelectedCamera || "").trim();
     if (selected) return selected;
 
@@ -2004,6 +2016,35 @@ class CameraGalleryCard extends LitElement {
     // populated (e.g. stub config).
     const options = this._getLiveCameraOptions();
     return options[0] || "";
+  }
+
+  /** Owner fork: a camera with both a `<name>_sub` and a `<name>_main` entity (Reolink's Fluent / Clear): both,
+   * else null. */
+  _liveSiblings(entity) {
+    const m = /^(camera\..+)_(sub|main)$/.exec(String(entity || ""));
+    if (!m) return null;
+    const states = this._hass?.states || {};
+    const sub = `${m[1]}_sub`;
+    const main = `${m[1]}_main`;
+    return states[sub] && states[main] ? { sub, main } : null;
+  }
+
+  /** Owner fork: "sub" (Low) or "main" (High) for the live stream shown; null when the camera has one stream. */
+  _liveStreamShown() {
+    const cam = this._getEffectiveLiveCamera();
+    if (!this._liveSiblings(cam)) return null;
+    return cam.endsWith("_sub") ? "sub" : "main";
+  }
+
+  /** Owner fork: Low / High pressed in the live player: the camera's other stream, the mute kept. */
+  _setLiveQuality(stream) {
+    if (stream !== "sub" && stream !== "main") return;
+    const before = this._getEffectiveLiveCamera();
+    this._liveQuality = stream;
+    if (this._getEffectiveLiveCamera() === before) return;
+    this._liveKeepMute = true;
+    this._teardownLiveView();
+    this.requestUpdate();
   }
 
   /**
@@ -2992,12 +3033,14 @@ class CameraGalleryCard extends LitElement {
     if (isNewMount) {
       card.hass = this._hass;
       injectLiveFillStyle(card);
+      const keepMute = !!this._liveKeepMute;
+      this._liveKeepMute = false;
       // Owner fork: the camera's picture at once while the stream connects (shared with the Cameras page's tiles).
       this._livePosterStop?.();
       this._livePosterStop = isStreamUrl
         ? null
         : attachLivePoster(host, card, this._hass, this._getEffectiveLiveCamera(), "cover");
-      this._liveMuted = this.config?.live_auto_muted !== false;
+      if (!keepMute) this._liveMuted = this.config?.live_auto_muted !== false;
       this._syncLiveMuted();
     }
 
@@ -3060,6 +3103,20 @@ class CameraGalleryCard extends LitElement {
     this.requestUpdate();
   }
 
+  /** The live view's camera chevrons (several live cameras on one card). */
+  _renderLiveChevrons(isLive, always = false) {
+    return isLive && this.config?.live_chevrons_enabled !== false && !isGridLayout(this.config, this._liveLayoutOverride) && this._getLiveCameraOptions().length > 1 && (always || this._pillsVisible || this.config?.persistent_controls) ? html`
+              <div class="pnav">
+                <button class="pnavbtn left" @pointerdown=${(e) => e.stopPropagation()} @click=${(e) => { e.stopPropagation(); this._navLiveCamera(-1); }}>
+                  <ha-icon icon="mdi:chevron-left"></ha-icon>
+                </button>
+                <button class="pnavbtn right" @pointerdown=${(e) => e.stopPropagation()} @click=${(e) => { e.stopPropagation(); this._navLiveCamera(1); }}>
+                  <ha-icon icon="mdi:chevron-right"></ha-icon>
+                </button>
+              </div>
+            ` : html``;
+  }
+
   _renderLiveCardHost() {
     return html`<div id="live-card-host" class="live-card-host"></div>`;
   }
@@ -3084,7 +3141,7 @@ class CameraGalleryCard extends LitElement {
   // The error message is rendered as a small toast inside the controls
   // bar (separate live region) so screen readers announce failures via
   // aria-live.
-  _renderMicTalkbackBar() {
+  _renderMicTalkbackBar({ top = false } = {}) {
     const cameraId = this._getEffectiveLiveCamera();
     const streamName = micStreamForCamera(cameraId, this.config);
     if (!streamName) return html``;
@@ -3132,7 +3189,7 @@ class CameraGalleryCard extends LitElement {
     // Avoid stacking on top of the pill bar — when pills sit at the
     // bottom (`bar_position: bottom`) flip the talkback bar to the top.
     const placement =
-      this.config?.bar_position === "bottom"
+      top || this.config?.bar_position === "bottom"
         ? "top:12px;bottom:auto"
         : "bottom:12px;top:auto";
     return html`
@@ -3883,18 +3940,22 @@ class CameraGalleryCard extends LitElement {
 
   /** Go to the next (1) or previous (-1) camera's gallery at `time`: its closest snapshot, or (stream) its NVR
    * recording from that moment in that quality. Replaces this page in the history, as photos do. */
-  _goToCamera(dir, { time, stream = null, fullscreen = false } = {}) {
+  _goToCamera(dir, { time, stream = null, fullscreen = false, live = false } = {}) {
     const list = this._swipeCameras();
     const me = list.findIndex((c) => c.gallery_id.trim() === this.config?.url_id);
     if (me < 0 || list.length < 2 || !Number.isFinite(time)) return false;
     const next = list[(me + dir + list.length) % list.length];
-    const q = new URLSearchParams({
-      cgc_id: next.gallery_id.trim(),
-      cgc_view: "gallery",
-      cgc_time: String(Math.round(time)),
-      cgc_near: "1",
-    });
-    if (stream === "sub" || stream === "main") q.set("cgc_nvr", stream);
+    // Owner fork: from live, the next camera's live view (in the same quality where it has Low / High).
+    const q = live
+      ? new URLSearchParams({ cgc_id: next.gallery_id.trim(), cgc_view: "live" })
+      : new URLSearchParams({
+          cgc_id: next.gallery_id.trim(),
+          cgc_view: "gallery",
+          cgc_time: String(Math.round(time)),
+          cgc_near: "1",
+        });
+    if (live && (stream === "sub" || stream === "main")) q.set("cgc_live", stream);
+    else if (stream === "sub" || stream === "main") q.set("cgc_nvr", stream);
     if (fullscreen) q.set("cgc_fs", "1");
     const path = next.navigation_path.trim();
     this._stopAutoplayAll();
@@ -4206,6 +4267,18 @@ class CameraGalleryCard extends LitElement {
       // sets, so the existing "Back to grid" pill picks it up for free.
       this._liveLayoutOverride = "single";
     }
+    if (view === "live") {
+      // Owner fork: swiped here from a camera's live view: its quality, and full screen if it was.
+      const params = new URLSearchParams(search);
+      const quality = params.get("cgc_live");
+      const before = this._getEffectiveLiveCamera();
+      if (quality === "sub" || quality === "main") this._liveQuality = quality;
+      if (params.get("cgc_fs") === "1") this._liveArriveFs = true;
+      if (!initial && this._isLiveActive() && this._getEffectiveLiveCamera() !== before) {
+        this._liveKeepMute = false;
+        this._teardownLiveView();
+      }
+    }
     if (view) {
       if (initial) this._viewMode = view;
       else this._setViewMode(view);
@@ -4272,6 +4345,7 @@ class CameraGalleryCard extends LitElement {
     }
 
     if (mode !== "live") {
+      this._liveArriveFs = false;
       this._hideLiveQuickSwitchButton();
       this._showLivePicker = false;
       this._resetZoom();
@@ -6249,6 +6323,16 @@ class CameraGalleryCard extends LitElement {
 
     if (this._isLiveActive()) {
       this._mountLiveCard();
+      if (this._liveArriveFs) {
+        const player = this.renderRoot?.querySelector(".preview cgc-nvr-player.live-player");
+        if (player) {
+          this._liveArriveFs = false;
+          // The document is full screen already (handed over by the last page's player): no new request needed.
+          player.updateComplete.then(() => {
+            if (player.isConnected && !player._fullscreen) player._enterFullscreen();
+          });
+        }
+      }
     } else {
       this._syncPreviewPlaybackFromState();
     }
@@ -6622,6 +6706,9 @@ class CameraGalleryCard extends LitElement {
 
     // BL-008: the NVR player belongs to the item it was started on; browsing away (or going live) closes it.
     const nvrOn = !!this._nvr && !isLive && this._nvr.src === selected;
+    // Owner fork (10-22): the single live view plays in the same player as the NVR's recordings (its controls,
+    // full screen, turn, zoom and swipes); the stream itself stays the card's (given as the player's children).
+    const livePlayer = isLive && !isGridLayout(this.config, this._liveLayoutOverride) && !fixedMode;
     // Owner fork: the camera's floodlight / siren buttons (bottom left; the player draws its own).
     const camActions = this._cameraActionList();
     // Owner fork: the full screen button at the bottom right of the picture, as in the NVR player.
@@ -6678,7 +6765,7 @@ class CameraGalleryCard extends LitElement {
             @click=${(e) => this._onPreviewClick(e)}
           >
             ${isLive
-              ? this._renderLiveInner()
+              ? livePlayer ? html`` : this._renderLiveInner()
               : noResultsForFilter
                 ? html`<div class="preview-empty">No media for this day.</div>`
                 : this._scrubbing
@@ -6735,7 +6822,38 @@ class CameraGalleryCard extends LitElement {
                   }}
                 ></cgc-nvr-player>`
               : html``}
-            ${this._hasLiveConfig() ? (() => {
+            ${livePlayer ? (() => {
+              const liveCropStyle = this._getLiveCropStyle();
+              const shown = this._liveStreamShown();
+              return html`<cgc-nvr-player
+                class="live-player"
+                .live=${true}
+                .hass=${this._hass}
+                .channel=${this._nvrChannel() ?? undefined}
+                .addon=${String(this.config?.nvr_addon || DEFAULT_NVR_ADDON)}
+                .label=${this._cameraLabel()}
+                .docfs=${true}
+                .actions=${camActions}
+                .liveStreams=${shown ? ["sub", "main"] : []}
+                .stream=${shown || "sub"}
+                .liveMuted=${!!this._liveMuted}
+                @nvr-action=${(e) => this._onCameraAction(e.detail?.id)}
+                @nvr-mute=${() => { this._toggleLiveMute(); this.requestUpdate(); }}
+                @nvr-stream=${(e) => this._setLiveQuality(e.detail?.stream)}
+                @nvr-fullscreen=${(e) => this._onNvrFullscreen(e)}
+                @nvr-swipe=${(e) => {
+                  const d = e.detail || {};
+                  if (this._goToCamera(d.dir, { time: Date.now(), stream: shown ? d.stream : null, fullscreen: d.fullscreen, live: true })) e.preventDefault();
+                  else if (this._getLiveCameraOptions().length > 1) this._navLiveCamera(d.dir);
+                }}
+              >
+                <div class="live-in-player">
+                  ${this._renderLiveInner()}
+                  <div id="live-card-host" class="live-card-host${liveCropStyle ? ' has-crop' : ''}" style="${liveCropStyle}"></div>
+                </div>
+                <div slot="top" class="live-top-slot">${this._renderMicTalkbackBar({ top: true })}${this._renderMicErrorToast()}${this._renderLiveChevrons(true, true)}</div>
+              </cgc-nvr-player>${this._renderSnapshotToast()}`;
+            })() : this._hasLiveConfig() ? (() => {
               const liveCropStyle = this._getLiveCropStyle();
               return html`<div id="live-card-host" class="live-card-host${isLive ? '' : ' live-host-hidden'}${liveCropStyle ? ' has-crop' : ''}" style="${liveCropStyle}"></div>${this._renderSnapshotToast()}`;
             })() : html``}
@@ -6751,16 +6869,7 @@ class CameraGalleryCard extends LitElement {
               </div>
             ` : html``}
 
-            ${isLive && this.config?.live_chevrons_enabled !== false && !isGridLayout(this.config, this._liveLayoutOverride) && this._getLiveCameraOptions().length > 1 && (this._pillsVisible || this.config?.persistent_controls) ? html`
-              <div class="pnav">
-                <button class="pnavbtn left" @pointerdown=${(e) => e.stopPropagation()} @click=${(e) => { e.stopPropagation(); this._navLiveCamera(-1); }}>
-                  <ha-icon icon="mdi:chevron-left"></ha-icon>
-                </button>
-                <button class="pnavbtn right" @pointerdown=${(e) => e.stopPropagation()} @click=${(e) => { e.stopPropagation(); this._navLiveCamera(1); }}>
-                  <ha-icon icon="mdi:chevron-right"></ha-icon>
-                </button>
-              </div>
-            ` : html``}
+            ${!livePlayer ? this._renderLiveChevrons(isLive) : html``}
 
             ${!isLive && !fixedMode && tsPosClass !== "hidden" ? html`
               <div class="gallery-pills align-${this.config?.gallery_pills_align || "center"} ${tsPosClass} ${this._pillsVisible || this.config?.persistent_controls ? "visible" : ""}">
@@ -6782,7 +6891,7 @@ class CameraGalleryCard extends LitElement {
                 <ha-icon icon="mdi:fullscreen"></ha-icon>
               </button>
             ` : html``}
-            ${!nvrOn && (isLive || !noResultsForFilter)
+            ${!nvrOn && !livePlayer && (isLive || !noResultsForFilter)
               ? renderCameraActions(camActions, (id) => this._onCameraAction(id), {
                   visible: !!(this._pillsVisible || this.config?.persistent_controls),
                 })
@@ -6819,7 +6928,7 @@ class CameraGalleryCard extends LitElement {
                 </div>
               `;
             })() : html``}
-            ${isLive && !isGridLayout(this.config, this._liveLayoutOverride) && !fixedMode ? html`
+            ${isLive && !isGridLayout(this.config, this._liveLayoutOverride) && !fixedMode && !livePlayer ? html`
               <div class="live-controls-bar ${tsPosClass} ${this._pillsVisible || this._showLivePicker || this.config?.persistent_controls ? "visible" : ""}">
                 <div class="live-controls-main">
                   ${livePillsLeft}${livePillsRight}
@@ -6828,7 +6937,7 @@ class CameraGalleryCard extends LitElement {
               </div>
             ` : html``}
             ${isLive && !isGridLayout(this.config, this._liveLayoutOverride) ? hamburgerPanel : html``}
-            ${isLive && !isGridLayout(this.config, this._liveLayoutOverride) ? this._renderMicTalkbackBar() : html``}
+            ${isLive && !isGridLayout(this.config, this._liveLayoutOverride) && !livePlayer ? this._renderMicTalkbackBar() : html``}
             ${isLive && !isGridLayout(this.config, this._liveLayoutOverride) ? this._renderPtzOverlay() : html``}
           </div>
         `

@@ -113,7 +113,7 @@ export function keptFrame(entity: string, now = Date.now()): KeptFrame | null {
   return null;
 }
 
-function deepVideo(root: Element | ShadowRoot | null | undefined): HTMLVideoElement | null {
+export function deepVideo(root: Element | ShadowRoot | null | undefined): HTMLVideoElement | null {
   if (!root) return null;
   const scopes: (Element | ShadowRoot)[] = [root];
   if (root instanceof Element && root.shadowRoot) scopes.push(root.shadowRoot);

@@ -108,7 +108,9 @@ describe("live fullscreen gallery chrome", () => {
     expect(timeline.matches(hidden)).toBe(true);
     expect(preview.matches(hidden)).toBe(false);
     expect(preview.querySelector("#live-card-host")).not.toBeNull();
-    for (const selector of [".live-controls-bar", ".mic-talkback-bar", ".pnav"]) {
+    // Owner fork (10-22): the live view's controls are the player's (cgc-nvr-player live), which holds the
+    // stream, the talk bar and the camera chevrons.
+    for (const selector of ["cgc-nvr-player.live-player", ".mic-talkback-bar", ".pnav"]) {
       expect(preview.querySelector(selector)).not.toBeNull();
       expect(preview.querySelector(selector).matches(hidden)).toBe(false);
     }

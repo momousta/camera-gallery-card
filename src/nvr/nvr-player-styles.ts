@@ -78,6 +78,28 @@ export const nvrPlayerStyles = css`
     -webkit-user-select: none;
     -webkit-user-drag: none;
   }
+  /* Live (owner 10-22): the host's stream, given as the player's children, fills the picture's box; the taps go to
+     .nvr-tap above it. */
+  .nvr-live {
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .nvr-live ::slotted(*) {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+  }
+  /* Children with slot="top" (the doorbell's talk bar): over the picture and its taps, always shown. */
+  .nvr-top {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+  }
+  .nvr-top ::slotted(*) {
+    pointer-events: auto;
+  }
   .nvr-video.quarter {
     inset: auto;
     left: 50%;
