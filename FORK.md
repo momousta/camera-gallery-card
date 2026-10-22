@@ -9,7 +9,7 @@ owner's "push everything".
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything").
 
-- **Now:** build `3.1.0-owner.20` (`?v=b31e4033e8a8`) since 2026-10-21 13:52: NVR recordings from an exact moment.
+- **Now:** build `3.1.0-owner.21` (`?v=e7e50319375b`) since 2026-10-22 15:05: NVR recordings from an exact moment.
   Needs the **NVR Playback** add-on `/addons/nvr_playback`, 0.2.1+ (0.4.0+ to save snapshots and clips, 0.4.1+ for
   cameras mounted sideways). Check the resource with `node deploy/ha-deploy.mjs status`. BL-008 so far:
   - Low / High; the strip coming to rest plays Low quietly;
@@ -43,10 +43,14 @@ owner's "push everything".
   - owner.20: a picture at once while live connects (`ui/live-poster.ts`, the tiles and the gallery's live view):
     the last frame the phone saw, else a sized snapshot, turned like the stream; it fades at the first frame. The
     tiles' buttons no longer float over HA's header when scrolled under it.
+  - owner.21: live plays in the same player as the recordings (`<cgc-nvr-player live>`). The card's stream is the
+    player's children. Low / High switches `<name>_sub` / `_main`. Snapshot, mute, full screen and the actions work
+    as in a recording, and a swipe opens the next camera live. The doorbell's talk bar sits in the player's top slot.
   - The cars page (the Vehicle Intelligence card's Recording button) creates the same `<cgc-nvr-player>`, so every
     player change reaches it with nothing to change there.
 - **Earlier builds**, each saved in `/share/backups/bl002/<build>-<v>/`. To go back to one, copy both files into
   `dist/` and run `switch`.
+  - `3.1.0-owner.20` (`?v=b31e4033e8a8`, a picture at once while live connects): `owner.20-b31e4033e8a8/`.
   - `3.1.0-owner.19` (`?v=48f61118555c`, camera tiles on the Cameras page): `owner.19-48f61118555c/`.
   - `3.1.0-owner.18` (`?v=736ca029ebe5`, floodlight and siren buttons): `owner.18-736ca029ebe5/`.
   - `3.1.0-owner.17` (`?v=f6898cd586e8`, swipes keep full screen): `owner.17-f6898cd586e8/`.
@@ -361,6 +365,17 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
     a swipe → Front, full screen, one request; its exit button left it; the siren armed on one tap.
   - The doorbell's 10 s refresh blanked its still while the next loaded; it now swaps once loaded.
   - Regression: `swipevariants` on Front's gallery (all six moved).
+- **owner.21** (10-22 15:05), Front Right and the doorbell's pages, Pixel 6 viewport, real CDP touches
+  (`--script liveplayer`, strict: one full-screen request allowed):
+  - **The owner's ask:** "why does the live stream player icons look different than streaming from the NVR? fix it".
+  - Front Right live: the player with Low / High (High on, as configured), snapshot / mute / full screen at the
+    bottom right, floodlight / siren at the bottom left; no old pill bar.
+  - Low → `camera.front_right_sub` playing 896×512. Mute toggled. Full screen: turned 90°, one request.
+  - A swipe in full screen → Front's live view, on Low (`camera.camera1_sub`, 1536×576 playing), still full screen,
+    still one request.
+  - Doorbell: no Low / High (one stream), unmuted as configured, the talk bar at the top. A real touch on it
+    reached the talk client (`toggle ring_doorbell`, recorded by the harness, nothing sent).
+  - Regression: `acts` (live, still, NVR player, full screen), `nvrgest` (skips, pinch, pan, full screen).
 - **owner.20** (10-21 13:52), the Cameras page and two camera pages, Pixel 6 viewport (`--script poster`: every
   50 ms from document start, per live player, the time to the poster and to the first video frame, and the samples
   that were black):
@@ -448,6 +463,8 @@ Harness and results: `/share/dev/bl002-work`.
 | `feat: a picture at once while live connects`                                                                         | `src/ui/live-poster.ts`, used by `camera-tile-card` and the gallery's single live view: the last frame the phone saw (kept from the playing video every 30 s and on close, ≤960 px JPEG in `localStorage`, 6 h), else a snapshot sized to the box (`width` + `height`, HA scales it), turned by the camera's orientation (`camera/get_prefs`) like go2rtc turns the stream; it fades at the player's first frame                                                                                                                                                                                                                                                                                                                                  | Owner 10-21: "both" (keep the streams warm; show the latest snapshot at once while live connects)                                                                                                                                          |
 | `fix(tile): the buttons stay under HA's header`                                                                       | `.tile` isolates its stacking, so its buttons (z-index) no longer draw over the header when the page scrolls the tile under it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Found in the owner.20 checks                                                                                                                                                                                                               |
 | `build: fork version 3.1.0-owner.20`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
+| `feat(live): the live view plays in the NVR player`                                                                   | `<cgc-nvr-player live>`: the host's stream as its children (slot), the player's controls (Low / High from `liveStreams`, snapshot, mute via `nvr-mute`, full screen, actions), auto-hide, double-tap / pinch zoom, swipes (`nvr-swipe` with `live: true`), portrait from the host's video; slot `top` for the doorbell's talk bar. The gallery puts its single live view (overlay controls) in it: `_liveQuality` picks `<name>_sub` / `_main`, a swipe opens the next camera live (`cgc_view=live`, `cgc_live`, `cgc_fs`), the arrival takes the full screen over                                                                                                                                                                                | Owner 10-22: "why does the live stream player icons look different than streaming from the NVR? fix it"                                                                                                                                    |
+| `build: fork version 3.1.0-owner.21`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 
 ## Build and test
 

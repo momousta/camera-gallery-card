@@ -245,6 +245,24 @@ live stream, Home Assistant's own player), `name`, `navigation_path`, `aspect_ra
 side), `fit` (`contain` default, or `cover`), `live: false` (a still refreshed every 10 s, for a battery doorbell),
 `floodlight_entity`, `siren_entity`, `siren_duration`, `detections` (`entity`, `label`, `icon`).
 
+**Live in the same player as the NVR's recordings** (owner fork): a camera page's live view (single camera, overlay
+controls) plays inside `<cgc-nvr-player>`'s live mode. The card keeps its stream (Home Assistant's player, WebRTC,
+mute, the doorbell's talk); the player gives it the recordings' controls:
+- Low / High at the top right, where the camera has both a `<name>_sub` and a `<name>_main` entity. They switch
+  the live stream between them.
+- Snapshot, mute and full screen at the bottom right; the floodlight / siren buttons at the bottom left. The
+  controls hide while it plays and come back on a tap.
+- The same full screen: turned on a portrait screen, it survives a swipe.
+- A double tap or a pinch zooms.
+- A swipe opens the next camera's live view (`swipe_cameras`), in the same quality and still full screen. On a card
+  without `swipe_cameras` it goes to its next live camera.
+- The snapshot is saved through the NVR Playback add-on where the camera has an `nvr_channel` (named and dated),
+  else downloaded from the page.
+
+The doorbell's talk bar lies over the top of the picture, in full screen too. The original pill bar (name, mute,
+picture-in-picture, full screen, snapshot, refresh) is no longer shown there. Grid layout and `controls_mode: fixed`
+keep the original live view.
+
 **A picture at once while live connects** (owner fork; the tiles and the gallery's live view): Home Assistant's
 player is black until the stream's first keyframe. A poster covers that wait and fades when the first frame shows.
 It is the last frame this phone saw of the camera: the playing video is copied every 30 s, and when the view closes,
