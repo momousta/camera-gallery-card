@@ -130,28 +130,57 @@ export function preloadOrder(
   return all.sort((a, b) => Math.abs(a.ms - t) - Math.abs(b.ms - t) || a.ms - b.ms);
 }
 
-/** Zoom levels of the timeline track, in pixels per minute (a day is 1440 minutes). */
-export const ZOOM_LEVELS = [1, 2, 4, 8, 16] as const;
-export const DEFAULT_ZOOM_INDEX = 2;
+/** Zoom of the timeline track, in pixels per minute (a day is 1440 minutes): from the whole day fitting the track
+ * (`fitPpm`) up to MAX_PPM (a pixel a second: scrubbing slowly). Pinch, Ctrl + wheel and the buttons change it. */
+export const MAX_PPM = 60;
+export const DEFAULT_PPM = 4;
+/** The buttons zoom by this factor. */
+export const ZOOM_STEP = 2;
+
+/** Pixels per minute that fit the whole day into `widthPx`. */
+export function fitPpm(widthPx: number, dayMs: number = 86_400_000): number {
+  if (!(widthPx > 0) || !(dayMs > 0)) return 0.1;
+  return widthPx / (dayMs / 60_000);
+}
+
+/** `ppm` within [fit, MAX_PPM] (a non-number: the default). */
+export function clampPpm(ppm: number, fit: number): number {
+  const lo = Math.min(Math.max(fit, 0.05), MAX_PPM);
+  const v = Number.isFinite(ppm) && ppm > 0 ? ppm : DEFAULT_PPM;
+  return Math.min(MAX_PPM, Math.max(lo, v));
+}
 
 export const msToPx = (ms: number, dayStart: number, ppm: number): number =>
   ((ms - dayStart) / 60_000) * ppm;
 export const pxToMs = (px: number, dayStart: number, ppm: number): number =>
   dayStart + (px / ppm) * 60_000;
 
-/** Label marks for the track: every hour, or every 3 hours when zoomed out. */
+/** Minutes between the track's labels at `ppm`, so they stay about 100-200 px apart. */
+export function markStepMin(ppm: number): number {
+  if (ppm < 0.6) return 360;
+  if (ppm < 2) return 180;
+  if (ppm < 12) return 60;
+  if (ppm < 30) return 15;
+  return 5;
+}
+
+/** Label marks for the track: every 6 h zoomed right out, every 3 h, every hour, every 15 or 5 minutes zoomed in.
+ * Major: every 6 hours (hours steps), every hour (minute steps). */
 export function hourMarks(
   start: number,
   end: number,
   ppm: number
 ): { ms: number; major: boolean }[] {
-  const step = ppm < 2 ? 3 : 1;
+  const step = markStepMin(ppm);
   const out: { ms: number; major: boolean }[] = [];
   const d = new Date(start);
-  for (let h = 0; ; h++) {
-    const ms = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h).getTime();
+  for (let m = 0; ; m += step) {
+    const ms = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, m).getTime();
     if (ms >= end) break;
-    if (ms >= start && h % step === 0) out.push({ ms, major: h % 6 === 0 });
+    if (ms < start) continue;
+    const at = new Date(ms);
+    const major = step >= 60 ? at.getHours() % 6 === 0 : at.getMinutes() === 0;
+    out.push({ ms, major });
   }
   return out;
 }

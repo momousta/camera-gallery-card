@@ -8,6 +8,10 @@ import {
   daysWithItems,
   eventKind,
   hourMarks,
+  clampPpm,
+  fitPpm,
+  markStepMin,
+  MAX_PPM,
   itemAtOrBefore,
   itemsBetween,
   msToPx,
@@ -137,6 +141,26 @@ describe("track geometry and labels", () => {
     expect(sparse.filter((m) => m.major).map((m) => new Date(m.ms).getHours())).toEqual([
       0, 6, 12, 18,
     ]);
+  });
+
+  it("zooms from the whole day on the track to a pixel a second", () => {
+    expect(fitPpm(412)).toBeCloseTo(412 / 1440, 6);
+    expect(fitPpm(412, 25 * 3_600_000)).toBeCloseTo(412 / 1500, 6); // a 25-hour day
+    expect(clampPpm(0.01, fitPpm(412))).toBeCloseTo(412 / 1440, 6);
+    expect(clampPpm(500, 0.3)).toBe(MAX_PPM);
+    expect(clampPpm(NaN, 0.3)).toBe(4);
+  });
+
+  it("labels the track more finely as it zooms in", () => {
+    const { start, end } = dayBounds("2026-10-19")!;
+    expect(markStepMin(0.29)).toBe(360);
+    expect(hourMarks(start, end, 0.29).map((m) => new Date(m.ms).getHours())).toEqual([
+      0, 6, 12, 18,
+    ]);
+    const fine = hourMarks(start, end, 40);
+    expect(fine).toHaveLength(288); // every 5 minutes
+    expect(fine.filter((m) => m.major)).toHaveLength(24); // on the hour
+    expect(hourMarks(start, end, 16)).toHaveLength(96); // every 15 minutes
   });
 
   it("labels how old a frame is", () => {

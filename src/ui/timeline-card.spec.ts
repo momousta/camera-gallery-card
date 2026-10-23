@@ -59,6 +59,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  localStorage.clear();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) =>
@@ -193,8 +194,145 @@ describe("the time track", () => {
     )!;
     zoomIn.click();
     await card.updateComplete;
-    expect(card._zoom).toBe(3);
+    expect(card._ppm()).toBe(8);
     expect(card._t).toBe(before);
+    expect(($(card, ".tl-scroll") as HTMLElement).style.getPropertyValue("--tl-ppm")).toBe("8");
+  });
+});
+
+describe("zoom on the track itself (owner 10-23)", () => {
+  const touches = (...xs: number[]) => xs.map((x) => ({ clientX: x, clientY: 100 }));
+  const touch = (el: HTMLElement, type: string, list: any[]) => {
+    const e: any = new Event(type, { bubbles: true, cancelable: true });
+    e.touches = list;
+    el.dispatchEvent(e);
+    return e;
+  };
+  async function wide() {
+    const card = await render();
+    card._half = 206; // a 412 px track
+    card.requestUpdate();
+    await card.updateComplete;
+    return card;
+  }
+
+  it("a pinch zooms around the moment under the playhead, and the phone keeps the zoom", async () => {
+    const card = await wide();
+    const el = $(card, ".tl-scroll") as HTMLElement;
+    let left = 0;
+    Object.defineProperty(el, "scrollLeft", {
+      get: () => left,
+      set: (v) => (left = v),
+      configurable: true,
+    });
+    const t = card._t;
+    touch(el, "touchstart", touches(100, 200));
+    const move = touch(el, "touchmove", touches(0, 400)); // the fingers 4 times as far apart
+    expect(move.defaultPrevented).toBe(true); // the track doesn't pan meanwhile
+    expect(card._ppm()).toBe(16);
+    expect(el.style.getPropertyValue("--tl-ppm")).toBe("16");
+    expect(left).toBe(14 * 60 * 16); // 14:00 still under the playhead
+    expect(card._t).toBe(t);
+    touch(el, "touchend", []);
+    await card.updateComplete;
+    expect(localStorage.getItem("cgc-timeline-ppm")).toBe("16");
+    const again = await render();
+    expect(again._ppm()).toBe(16);
+  });
+
+  it("pinching right out shows the whole day; in, a pixel a second at most", async () => {
+    const card = await wide();
+    const el = $(card, ".tl-scroll") as HTMLElement;
+    touch(el, "touchstart", touches(0, 400));
+    touch(el, "touchmove", touches(199, 201));
+    expect(card._ppm()).toBeCloseTo(412 / 1440, 6);
+    touch(el, "touchend", []);
+    await card.updateComplete;
+    const out = $$(card, ".tl-ctrls .tl-btn").find(
+      (b) => b.getAttribute("aria-label") === "Zoom out"
+    )!;
+    expect((out as HTMLButtonElement).disabled).toBe(true);
+    expect($$(card, ".tl-hour").map((h) => h.textContent!.trim())).toHaveLength(3); // 0, 6 and 12 h (now is 14:00)
+    touch(el, "touchstart", touches(199, 201));
+    touch(el, "touchmove", touches(0, 4000));
+    expect(card._ppm()).toBe(60);
+  });
+
+  it("Ctrl + wheel (a trackpad pinch) zooms", async () => {
+    const card = await wide();
+    const el = $(card, ".tl-scroll") as HTMLElement;
+    const e = new WheelEvent("wheel", { deltaY: -100, ctrlKey: true, cancelable: true });
+    el.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
+    expect(card._ppm()).toBeCloseTo(4 * Math.E, 6);
+  });
+
+  it("the track's marks sit at the zoom without being drawn again", async () => {
+    const card = await wide();
+    const mark = $(card, ".tl-mark") as HTMLElement;
+    expect(mark.getAttribute("style")).toContain("var(--tl-ppm)");
+    card._zoomTo(5, { commit: false });
+    expect($(card, ".tl-mark")).toBe(mark); // the same element
+  });
+});
+
+describe("scrolling past either end of the day (owner 10-23)", () => {
+  async function scrolled(card: any, positions: number[]) {
+    const el = $(card, ".tl-scroll") as HTMLElement;
+    let left = 0;
+    Object.defineProperty(el, "scrollLeft", {
+      get: () => left,
+      set: (v) => (left = v),
+      configurable: true,
+    });
+    Object.defineProperty(el, "scrollWidth", { value: 14 * 60 * 4 + 412, configurable: true });
+    Object.defineProperty(el, "clientWidth", { value: 412, configurable: true });
+    for (const p of positions) {
+      card._syncedLeft = null;
+      left = p;
+      el.dispatchEvent(new Event("scroll"));
+      await settle(card, 20);
+    }
+    return el;
+  }
+
+  it("the start of the day goes on into the day before, near its end", async () => {
+    const card = await render();
+    await scrolled(card, [400, 0]);
+    expect(card._day).toBe("2026-10-18");
+    expect(card._t).toBe(new Date(2026, 9, 19).getTime() - 1000 - 60_000); // 23:58:59
+    expect(tileSrcs(card)[0]).toBe(P("front", "motion_20261018_220000.gif"));
+  });
+
+  it("the end of a past day goes on into the next day with clips, near its start", async () => {
+    const card = await render();
+    card._setDay("2026-10-17");
+    await card.updateComplete;
+    const b = card._bounds();
+    const el = $(card, ".tl-scroll") as HTMLElement;
+    let left = 0;
+    Object.defineProperty(el, "scrollLeft", {
+      get: () => left,
+      set: (v) => (left = v),
+      configurable: true,
+    });
+    Object.defineProperty(el, "scrollWidth", { value: 1440 * 4 + 412, configurable: true });
+    Object.defineProperty(el, "clientWidth", { value: 412, configurable: true });
+    for (const p of [5000, 1440 * 4]) {
+      card._syncedLeft = null;
+      left = p;
+      el.dispatchEvent(new Event("scroll"));
+      await settle(card, 20);
+    }
+    expect(b.start).toBe(new Date(2026, 9, 17).getTime());
+    expect(card._day).toBe("2026-10-18");
+    expect(card._t).toBe(new Date(2026, 9, 18).getTime() + 60_000);
+  });
+
+  it("today's end is now: nothing after it", async () => {
+    const card = await render();
+    await scrolled(card, [3000, 14 * 60 * 4]);
+    expect(card._day).toBe("2026-10-19");
   });
 });
 

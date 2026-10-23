@@ -9,6 +9,10 @@
  * on the frame shown, at the moment on the track: Low / High there play from that moment, and a swipe goes on to
  * the next camera at the same moment. Back returns here, on the same moment.
  *
+ * Zoom (owner 10-23): pinch the time track (or Ctrl + wheel, or the buttons) from the whole day on the screen to a
+ * pixel a second; the moment stays under the playhead, and the phone remembers the zoom. Scrolling to either end
+ * of the day goes on into the day before or after (the nearest with clips), as the camera pages' strips do.
+ *
  * Config:
  *   type: custom:camera-timeline-card
  *   path_datetime_format: YYYYMMDD_HHmmss     # how times are read from the file names (required)
@@ -37,15 +41,20 @@ import {
   dayBounds,
   dayKeyOf,
   daysWithItems,
-  DEFAULT_ZOOM_INDEX,
+  clampPpm,
+  DEFAULT_PPM,
+  fitPpm,
   hourMarks,
   itemAtOrBefore,
   itemsBetween,
+  markStepMin,
+  MAX_PPM,
   msToPx,
   preloadOrder,
   pxToMs,
-  ZOOM_LEVELS,
+  ZOOM_STEP,
 } from "./timeline-data";
+import { EdgeFlip } from "../ui/edge-flip";
 import { timelineStyles } from "./timeline-styles";
 
 const TAG = "camera-timeline-card";
@@ -66,13 +75,28 @@ const KIND_ICON = {
   visitor: "mdi:doorbell",
 };
 const MARK_KINDS = new Set(["person", "car", "dog", "visitor", "motion"]);
+/** The zoom, kept on the device. */
+const PPM_KEY = "cgc-timeline-ppm";
+/** Gone on into the next / previous day: land this far inside it, so turning back doesn't return at once. */
+const EDGE_LAND_MS = 60_000;
+/** The track counts as at rest this long after its last scroll, with no finger on it. */
+const SETTLE_MS = 250;
+const DAY_MS = 86_400_000;
+
+function loadPpm() {
+  try {
+    const v = Number(globalThis.localStorage?.getItem(PPM_KEY));
+    return v > 0 ? v : DEFAULT_PPM;
+  } catch {
+    return DEFAULT_PPM;
+  }
+}
 
 export class CameraTimelineCard extends LitElement {
   static get properties() {
     return {
       _t: { state: true },
       _day: { state: true },
-      _zoom: { state: true },
       _playing: { state: true },
       _speedIdx: { state: true },
       _calOpen: { state: true },
@@ -95,7 +119,11 @@ export class CameraTimelineCard extends LitElement {
     this._days = [];
     this._day = "";
     this._t = null;
-    this._zoom = DEFAULT_ZOOM_INDEX;
+    this._ppmV = loadPpm(); // the asked zoom; `_ppm()` is it within what the track allows
+    this._pinch = null; // { d0, p0 } while two fingers pinch the track
+    this._touching = false;
+    this._settleTimer = 0;
+    this._edge = new EdgeFlip({ onEdge: (side) => this._flipDay(side) });
     this._playing = false;
     this._speedIdx = 0;
     this._calOpen = false;
@@ -176,6 +204,8 @@ export class CameraTimelineCard extends LitElement {
     if (this._scrollRaf) cancelAnimationFrame(this._scrollRaf);
     this._scrollRaf = 0;
     clearTimeout(this._planTimer);
+    clearTimeout(this._settleTimer);
+    this._pinch = null;
     this._planKey = "";
     this._preloader?.setQueue([]);
     this._resizeObserver?.disconnect();
@@ -214,8 +244,14 @@ export class CameraTimelineCard extends LitElement {
     return { ...b, last };
   }
 
+  /** Pixels per minute that show the whole day on the track. */
+  _fit() {
+    const b = dayBounds(this._day);
+    return fitPpm(2 * this._half, b ? b.end - b.start : DAY_MS);
+  }
+
   _ppm() {
-    return ZOOM_LEVELS[this._zoom] ?? ZOOM_LEVELS[DEFAULT_ZOOM_INDEX];
+    return clampPpm(this._ppmV, this._fit());
   }
 
   _previewFor(src) {
@@ -284,10 +320,51 @@ export class CameraTimelineCard extends LitElement {
   }
 
   _zoomBy(delta) {
-    const z = Math.min(ZOOM_LEVELS.length - 1, Math.max(0, this._zoom + delta));
-    if (z === this._zoom) return;
-    this._zoom = z;
-    this._needsScrollSync = true;
+    this._zoomTo(this._ppm() * (delta > 0 ? ZOOM_STEP : 1 / ZOOM_STEP));
+  }
+
+  /** Zoom to `ppm` (kept within the track's range), the moment staying under the playhead. Only the track's CSS
+   * variable and scroll change (smooth while pinching); `commit` re-renders and keeps the zoom on the device. */
+  _zoomTo(ppm, { commit = true } = {}) {
+    const before = this._ppm();
+    const next = clampPpm(ppm, this._fit());
+    if (Math.abs(next - before) > 1e-9) {
+      this._ppmV = next;
+      const el = this._scroller();
+      const b = this._bounds();
+      if (el) {
+        el.style.setProperty("--tl-ppm", String(next));
+        if (b && this._t !== null) {
+          el.scrollLeft = msToPx(this._t, b.start, next);
+          this._syncedLeft = el.scrollLeft;
+        }
+      }
+      if (!commit && markStepMin(next) !== markStepMin(before)) this.requestUpdate(); // new labels
+    }
+    if (commit) {
+      this._savePpm();
+      this.requestUpdate();
+    }
+  }
+
+  _savePpm() {
+    try {
+      globalThis.localStorage?.setItem(PPM_KEY, String(this._ppmV));
+    } catch {
+      /* private mode: the zoom isn't kept */
+    }
+  }
+
+  /** The user scrolled to the start (-1) or end (1) of the day: on into the day before or after, near its other
+   * end. False when there is no such day with clips. */
+  _flipDay(side) {
+    const next = this._neighbourDay(side);
+    const nb = next ? dayBounds(next) : null;
+    if (!nb) return false;
+    this._userMoved = true;
+    this._pause();
+    this._setDay(next, side < 0 ? nb.end - 1000 - EDGE_LAND_MS : nb.start + EDGE_LAND_MS);
+    return true;
   }
 
   _togglePlay() {
@@ -340,12 +417,62 @@ export class CameraTimelineCard extends LitElement {
       this._scrollRaf = 0;
       const el = this._scroller();
       const b = this._bounds();
-      if (!el || !b || this._needsScrollSync || this._playing) return;
+      if (!el || !b || this._needsScrollSync || this._playing || this._pinch) return;
       if (this._syncedLeft !== null && Math.abs(el.scrollLeft - this._syncedLeft) < 1) return;
       this._syncedLeft = null;
       this._userMoved = true;
       this._setT(pxToMs(el.scrollLeft, b.start, this._ppm()));
+      this._edge.scrolled(el);
+      this._armSettle();
     });
+  }
+
+  /** The track at rest (no finger, no scroll for a moment): a day change may happen again. */
+  _armSettle() {
+    clearTimeout(this._settleTimer);
+    this._settleTimer = setTimeout(() => {
+      if (!this._touching) this._edge.release();
+    }, SETTLE_MS);
+  }
+
+  _onTouchStart(e) {
+    this._onUserTrack();
+    this._touching = true;
+    clearTimeout(this._settleTimer);
+    const el = this._scroller();
+    const ts = e.touches;
+    if (ts?.length >= 2) {
+      const d = Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+      this._pinch = { d0: d || 1, p0: this._ppm() };
+      this._edge.touchEnd();
+    } else if (ts?.length === 1 && el) {
+      this._edge.touchStart(ts[0].clientX, el);
+    }
+  }
+
+  _onTouchMove(e) {
+    const ts = e.touches;
+    if (this._pinch && ts?.length >= 2) {
+      if (e.cancelable) e.preventDefault(); // the fingers zoom; the track doesn't pan
+      const d = Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+      this._zoomTo((this._pinch.p0 * d) / this._pinch.d0, { commit: false });
+      return;
+    }
+    const el = this._scroller();
+    if (!this._pinch && ts?.length === 1 && el) this._edge.touchMove(ts[0].clientX, el);
+  }
+
+  _onTouchEnd(e) {
+    const left = e.touches?.length ?? 0;
+    if (this._pinch && left < 2) {
+      this._pinch = null;
+      this._zoomTo(this._ppmV);
+    }
+    if (!left) {
+      this._touching = false;
+      this._edge.touchEnd();
+      this._armSettle();
+    }
   }
 
   /** A press, touch or wheel on the track takes over from playback. */
@@ -379,45 +506,54 @@ export class CameraTimelineCard extends LitElement {
   _onWheel(e) {
     this._onUserTrack();
     const el = this._scroller();
-    if (!el || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    if (!el) return;
+    if (e.ctrlKey) {
+      // A trackpad pinch (or Ctrl + wheel) zooms.
+      e.preventDefault();
+      this._zoomTo(this._ppm() * Math.exp(-e.deltaY * 0.01));
+      return;
+    }
+    const vertical = Math.abs(e.deltaY) > Math.abs(e.deltaX);
+    this._edge.wheel(vertical ? e.deltaY : e.deltaX, el);
+    this._armSettle();
+    if (!vertical) return;
     e.preventDefault();
     el.scrollLeft += e.deltaY;
   }
 
-  _renderTrack(b, ppm, half) {
-    const width = msToPx(b.last, b.start, ppm);
+  /** The track at the zoom in the scroller's CSS variables (--tl-ppm px a minute, --tl-half px before the day),
+   * so zooming moves it without rendering it again; only the labels change with the zoom (markStepMin). */
+  _renderTrack(b, ppm) {
+    const min = (ms) => ((ms - b.start) / 60_000).toFixed(4);
+    const x = (ms, dx = 0) =>
+      `calc((var(--tl-half) + ${min(ms)} * var(--tl-ppm)) * 1px${dx ? ` - ${-dx}px` : ""})`;
     const marks = hourMarks(b.start, b.end, ppm).filter((m) => m.ms <= b.last);
     const locale = this._hass?.locale;
     const laneStep = "calc(var(--tl-lane-h) + 2px)";
     const lanes = this._tracks.map((items) =>
-      itemsBetween(items, b.start, b.end).filter((x) => MARK_KINDS.has(x.kind))
+      itemsBetween(items, b.start, b.end).filter((it) => MARK_KINDS.has(it.kind))
     );
     return html`
       <div
         class="tl-track"
-        style="width:${Math.ceil(width + 2 * half)}px;--tl-lanes:${lanes.length}"
+        style="width:calc((${min(
+          b.last
+        )} * var(--tl-ppm) + 2 * var(--tl-half)) * 1px);--tl-lanes:${lanes.length}"
       >
         ${marks.map(
           (m) =>
-            html`<div
-              class="tl-hour ${m.major ? "major" : ""}"
-              style="left:${half + msToPx(m.ms, b.start, ppm)}px"
-            >
+            html`<div class="tl-hour ${m.major ? "major" : ""}" style="left:${x(m.ms)}">
               <span>${formatTimeFromMs(m.ms, locale)}</span>
             </div>`
         )}
         ${b.last < b.end - 1000
-          ? html`<div class="tl-now-edge" style="left:${half + width}px" title="Now"></div>`
+          ? html`<div class="tl-now-edge" style="left:${x(b.last)}" title="Now"></div>`
           : ""}
         ${lanes.map(
           (items, ci) =>
             html`<div class="tl-lane" style="top:calc(30px + ${ci} * ${laneStep})">
               ${items.map(
-                (it) =>
-                  html`<i
-                    class="tl-mark k-${it.kind}"
-                    style="left:${half + msToPx(it.ms, b.start, ppm) - 1}px"
-                  ></i>`
+                (it) => html`<i class="tl-mark k-${it.kind}" style="left:${x(it.ms, -1)}"></i>`
               )}
             </div>`
         )}
@@ -571,7 +707,7 @@ export class CameraTimelineCard extends LitElement {
               </button>
               <button
                 class="tl-btn icon"
-                ?disabled=${this._zoom <= 0}
+                ?disabled=${ppm <= this._fit() + 1e-6}
                 @click=${() => this._zoomBy(-1)}
                 title="Zoom out"
                 aria-label="Zoom out"
@@ -580,7 +716,7 @@ export class CameraTimelineCard extends LitElement {
               </button>
               <button
                 class="tl-btn icon"
-                ?disabled=${this._zoom >= ZOOM_LEVELS.length - 1}
+                ?disabled=${ppm >= MAX_PPM - 1e-6}
                 @click=${() => this._zoomBy(1)}
                 title="Zoom in"
                 aria-label="Zoom in"
@@ -599,16 +735,20 @@ export class CameraTimelineCard extends LitElement {
             <div class="tl-playhead"></div>
             <div
               class="tl-scroll"
+              style="--tl-ppm:${ppm};--tl-half:${half}"
               @scroll=${() => this._onScroll()}
               @pointerdown=${(e) => this._onPointerDown(e)}
               @pointermove=${(e) => this._onPointerMove(e)}
               @pointerup=${(e) => this._onPointerUp(e)}
               @pointercancel=${(e) => this._onPointerUp(e)}
-              @touchstart=${{ handleEvent: () => this._onUserTrack(), passive: true }}
+              @touchstart=${{ handleEvent: (e) => this._onTouchStart(e), passive: true }}
+              @touchmove=${{ handleEvent: (e) => this._onTouchMove(e), passive: false }}
+              @touchend=${{ handleEvent: (e) => this._onTouchEnd(e), passive: true }}
+              @touchcancel=${{ handleEvent: (e) => this._onTouchEnd(e), passive: true }}
               @wheel=${(e) => this._onWheel(e)}
             >
-              ${guard([this._day, this._zoom, this._rev, half, Math.floor(b.last / 60_000)], () =>
-                this._renderTrack(b, ppm, half)
+              ${guard([this._day, markStepMin(ppm), this._rev, Math.floor(b.last / 60_000)], () =>
+                this._renderTrack(b, ppm)
               )}
             </div>
           </div>
