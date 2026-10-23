@@ -10,6 +10,7 @@ import { cardStyles } from "./styles";
 import { STYLE_SECTIONS } from "./config/styling-config";
 import { injectLiveFillStyle } from "./ui/live-fill-style";
 import { attachLivePoster } from "./ui/live-poster";
+import { EdgeFlip } from "./ui/edge-flip";
 import {
   dayKeyFromMs,
   dtKeyFromMs,
@@ -472,6 +473,10 @@ class CameraGalleryCard extends LitElement {
     this._scrubClickBlockUntil = 0;
     this._stripScrubPointerId = null; // not _scrubPointerId: that one is the video progress bar's
     this._scrubGesture = new ScrubGesture({ onSettle: () => this._onScrubSettle() });
+    // Owner fork (10-23): scrolling the strip past either end of the day goes on into the next / previous day
+    // (shared with the Timeline's track); `_landAt` is the end of the new day's strip to land on.
+    this._stripEdge = new EdgeFlip({ onEdge: (side) => this._stripEdgeDay(side) });
+    this._landAt = null;
     // BL-008: a landscape picture full screen on a portrait screen is turned (the app's WebView can't turn it).
     this._fsTurn = new TurnWatcher(() => this.requestUpdate());
     this._imgFsLandscape = false;
@@ -4023,16 +4028,38 @@ class CameraGalleryCard extends LitElement {
 
   /** The item the viewer shows ({ src, dtMs, … }), resolved the way render resolves it. */
   _selectedItem() {
+    const filtered = this._filteredList();
+    if (!filtered.length) return null;
+    const idx = Math.min(Math.max(this._selectedIndex ?? 0, 0), filtered.length - 1);
+    return filtered[idx] ?? null;
+  }
+
+  /** The strip's items for the shown day, as render lists them. */
+  _filteredList() {
     const base = this._computeBaseList();
     const filteredAll = (base?.objFiltered || []).filter(
       (x) => this._matchesTypeFilter(x.src) && (!this._filterFavorites || this._favorites.has(x.src))
     );
-    if (!filteredAll.length) return null;
+    if (!filteredAll.length) return [];
     const cap = this.config?.max_media ?? DEFAULT_MAX_MEDIA;
-    const filtered = this._injectExpandedClusterMembers(filteredAll.slice(0, Math.min(cap, filteredAll.length)));
-    if (!filtered.length) return null;
-    const idx = Math.min(Math.max(this._selectedIndex ?? 0, 0), filtered.length - 1);
-    return filtered[idx] ?? null;
+    return this._injectExpandedClusterMembers(filteredAll.slice(0, Math.min(cap, filteredAll.length)));
+  }
+
+  /** Owner fork: the strip was scrolled past its left (-1) or right (1) end: the day that continues that way (older
+   * toward the oldest end), landing on the new strip's other end. False when there is none. */
+  _stripEdgeDay(side) {
+    if (this._selectMode) return false;
+    const base = this._computeBaseList();
+    const days = base?.days || [];
+    const active = base?.activeDay ?? this._selectedDay ?? null;
+    const newestLeft = String(this.config?.thumb_sort_order || "newest").toLowerCase().trim() !== "oldest";
+    const delta = (side > 0) === newestLeft ? 1 : -1; // +1: the day before (as the "Previous day" button)
+    const current = active && days.includes(active) ? active : (days[0] ?? null);
+    const next = stepDay(active, delta, days); // stays on the first / last day at the ends of the list
+    if (next === null || next === current) return false;
+    this._stepDay(delta, days, active);
+    this._landAt = side > 0 ? "start" : "end";
+    return true;
   }
 
   _stopNvr() {
@@ -4971,7 +4998,8 @@ class CameraGalleryCard extends LitElement {
     this.requestUpdate();
   }
 
-  _resetThumbScrollToStart() {
+  /** toEnd (owner fork): the strip's other end instead (arrived by scrolling past a day's end). */
+  _resetThumbScrollToStart(toEnd = false) {
     requestAnimationFrame(() => {
       const wrap = this.renderRoot?.querySelector(".tthumbs");
       if (!wrap) return;
@@ -4982,9 +5010,10 @@ class CameraGalleryCard extends LitElement {
           wrap.scrollTo({ behavior: "auto", top: 0 });
         } catch (_) {}
       } else {
-        wrap.scrollLeft = 0;
+        const left = toEnd ? Math.max(0, wrap.scrollWidth - wrap.clientWidth) : 0;
+        wrap.scrollLeft = left;
         try {
-          wrap.scrollTo({ behavior: "auto", left: 0 });
+          wrap.scrollTo({ behavior: "auto", left });
         } catch (_) {}
       }
 
@@ -5624,6 +5653,7 @@ class CameraGalleryCard extends LitElement {
   }
 
   _onScrubSettle() {
+    this._stripEdge.release();
     if (this._scrubDragging) {
       // Wheel scrub ended: snap back on, the browser centres the nearest thumb.
       this._scrubDragging = false;
@@ -5918,7 +5948,10 @@ class CameraGalleryCard extends LitElement {
     if (!el) return;
     this._thumbsScrolledAt = performance.now();
     this._coverThumbWindow(el);
-    if (this._scrubEnabled() && this._scrubGesture.scrolled()) this._scheduleScrubFollow(el);
+    if (this._scrubEnabled() && this._scrubGesture.scrolled()) {
+      this._scheduleScrubFollow(el);
+      if (!this._isThumbLayoutVertical()) this._stripEdge.scrolled(el);
+    }
 
     const thumbs = el.querySelectorAll(".tthumb");
     if (!thumbs.length) return;
@@ -6006,6 +6039,7 @@ class CameraGalleryCard extends LitElement {
     if (e.deltaMode === 1) step = delta * 16;
     if (e.deltaMode === 2) step = delta * el.clientWidth * 0.85;
 
+    if (this._scrubEnabled()) this._stripEdge.wheel(step, el);
     this._thumbWheelAccum = (this._thumbWheelAccum || 0) + step;
 
     if (!this._thumbWheelRaf) {
@@ -6184,7 +6218,14 @@ class CameraGalleryCard extends LitElement {
     if (this._forceThumbReset || dayChanged || filterChanged) {
       this._forceThumbReset = false;
       this._pendingScrollToI = null;
-      this._resetThumbScrollToStart();
+      // Owner fork: arrived by scrolling past the strip's end: the new day's other end.
+      const land = dayChanged ? this._landAt : null;
+      this._landAt = null;
+      if (land === "end") {
+        const n = this._filteredList().length;
+        if (n) this._selectedIndex = n - 1;
+      }
+      this._resetThumbScrollToStart(land === "end");
       this._revealedThumbs.clear();
       this._mediaClient.clearResolveFailed();
       if (this._thumbObserver) {
@@ -7045,8 +7086,10 @@ class CameraGalleryCard extends LitElement {
                   @pointerup=${scrubOn ? { handleEvent: (e) => this._onScrubPointerUp(e), capture: true } : null}
                   @pointercancel=${scrubOn ? { handleEvent: (e) => this._onScrubPointerCancel(e), capture: true } : null}
                   @click=${scrubOn ? { handleEvent: (e) => this._onScrubClickCapture(e), capture: true } : null}
-                  @touchend=${scrubOn ? { handleEvent: () => this._scrubGesture.touchEnd(), passive: true } : null}
-                  @touchcancel=${scrubOn ? { handleEvent: () => this._scrubGesture.touchEnd(), passive: true } : null}
+                  @touchstart=${scrubOn && !isVerticalThumbs ? { handleEvent: (e) => { if (e.touches?.length === 1) this._stripEdge.touchStart(e.touches[0].clientX, e.currentTarget); else this._stripEdge.touchEnd(); }, passive: true } : null}
+                  @touchmove=${scrubOn && !isVerticalThumbs ? { handleEvent: (e) => { if (e.touches?.length === 1) this._stripEdge.touchMove(e.touches[0].clientX, e.currentTarget); }, passive: true } : null}
+                  @touchend=${scrubOn ? { handleEvent: () => { this._scrubGesture.touchEnd(); this._stripEdge.touchEnd(); }, passive: true } : null}
+                  @touchcancel=${scrubOn ? { handleEvent: () => { this._scrubGesture.touchEnd(); this._stripEdge.touchEnd(); }, passive: true } : null}
                 >
                   ${thumbsBefore.map(thumbPlaceholder)}
                   ${repeat(thumbs, (it) => it._key, (it) => {

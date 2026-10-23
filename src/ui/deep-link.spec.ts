@@ -923,3 +923,34 @@ describe("live in the NVR player (owner 10-22)", () => {
     expect(window.location.search).toBe(""); // used once
   });
 });
+
+describe("the strip past either end of the day (owner 10-23)", () => {
+  it("past the oldest end: the day before, on its newest; past the newest end: the next day, on its oldest", async () => {
+    const card = makeCard();
+    await show(card);
+    card._setViewMode("media");
+    await card.updateComplete;
+    expect(card._selectedDay ?? DAYS[0]).toBe("2026-10-19");
+    expect(card._stripEdgeDay(1)).toBe(true); // the right end: older
+    await card.updateComplete;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(card._selectedDay).toBe("2026-10-18");
+    expect(card._selectedIndex).toBe(0); // its newest, at the left
+    expect(card._stripEdgeDay(1)).toBe(false); // nothing older
+    expect(card._stripEdgeDay(-1)).toBe(true); // the left end: newer
+    await card.updateComplete;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(card._selectedDay).toBe("2026-10-19");
+    expect(card._selectedIndex).toBe(2); // its oldest, at the right
+  });
+
+  it("oldest-first strips go the other way", async () => {
+    const card = makeCard({ thumb_sort_order: "oldest" });
+    await show(card);
+    card._setViewMode("media");
+    await card.updateComplete;
+    expect(card._stripEdgeDay(-1)).toBe(true); // the left end of an oldest-first strip: older
+    await card.updateComplete;
+    expect(card._selectedDay).toBe("2026-10-18");
+  });
+});
