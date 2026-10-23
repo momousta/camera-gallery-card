@@ -9,7 +9,7 @@ owner's "push everything".
 
 **Live since 2026-10-18 13:04** (owner's go-ahead: "implement everything").
 
-- **Now:** build `3.1.0-owner.21` (`?v=e7e50319375b`) since 2026-10-22 15:05: NVR recordings from an exact moment.
+- **Now:** build `3.1.0-owner.22` (`?v=7b2de30b16ca`) since 2026-10-23 15:25: NVR recordings from an exact moment.
   Needs the **NVR Playback** add-on `/addons/nvr_playback`, 0.2.1+ (0.4.0+ to save snapshots and clips, 0.4.1+ for
   cameras mounted sideways). Check the resource with `node deploy/ha-deploy.mjs status`. BL-008 so far:
   - Low / High; the strip coming to rest plays Low quietly;
@@ -46,10 +46,15 @@ owner's "push everything".
   - owner.21: live plays in the same player as the recordings (`<cgc-nvr-player live>`). The card's stream is the
     player's children. Low / High switches `<name>_sub` / `_main`. Snapshot, mute, full screen and the actions work
     as in a recording, and a swipe opens the next camera live. The doorbell's talk bar sits in the player's top slot.
+  - owner.22:
+    - the Timeline's track zooms with a pinch, from the whole day to a pixel a second (the zoom is remembered);
+    - scrolling past either end of a day goes on into the next one, on the Timeline and on the camera pages'
+      strips alike (`ui/edge-flip.ts`).
   - The cars page (the Vehicle Intelligence card's Recording button) creates the same `<cgc-nvr-player>`, so every
     player change reaches it with nothing to change there.
 - **Earlier builds**, each saved in `/share/backups/bl002/<build>-<v>/`. To go back to one, copy both files into
   `dist/` and run `switch`.
+  - `3.1.0-owner.21` (`?v=e7e50319375b`, live in the NVR player): `owner.21-e7e50319375b/`.
   - `3.1.0-owner.20` (`?v=b31e4033e8a8`, a picture at once while live connects): `owner.20-b31e4033e8a8/`.
   - `3.1.0-owner.19` (`?v=48f61118555c`, camera tiles on the Cameras page): `owner.19-48f61118555c/`.
   - `3.1.0-owner.18` (`?v=736ca029ebe5`, floodlight and siren buttons): `owner.18-736ca029ebe5/`.
@@ -365,6 +370,21 @@ Checked against the live frontend (headless Chromium, Pixel 6 viewport, real tou
     a swipe → Front, full screen, one request; its exit button left it; the siren armed on one tap.
   - The doorbell's 10 s refresh blanked its still while the next loaded; it now swaps once loaded.
   - Regression: `swipevariants` on Front's gallery (all six moved).
+- **owner.22** (10-23 15:25), the Timeline and Front Right's pages, Pixel 6 viewport, real CDP touches (two fingers
+  for the pinches):
+  - **The owner's ask:** "add the ability to zoom in and out in the timeline itself … show the full day, or zoom
+    in to scrub at a slower rate", and "when I scroll to either end of the timeline, either on the camera view or
+    the timeline view, it should move me to the following or previous day".
+  - Timeline (`--script tlzoom`):
+    - a pinch out shows the whole day (0.275 px/min on a 396 px track; labels every 6 h); pinches in reach a pixel a
+      second (labels every 5 min); the moment stays 15:23:08 throughout, and the zoom is kept (`localStorage`);
+    - dragging past midnight opens Oct 22 (the rest of the drag carries on into it); dragging past its end comes
+      back to Oct 23.
+  - Camera page strip (`--script stripedge`):
+    - a drag past the oldest end of Oct 23 opens Oct 22 on its newest (23:55);
+    - a finger pulling on past that day's newest end returns to Oct 23 on its oldest (00:05).
+    - Found and fixed: the first flick's momentum still scrolling held the strip through the next touch; a new
+      touch is a new gesture now.
 - **owner.21** (10-22 15:05), Front Right and the doorbell's pages, Pixel 6 viewport, real CDP touches
   (`--script liveplayer`, strict: one full-screen request allowed):
   - **The owner's ask:** "why does the live stream player icons look different than streaming from the NVR? fix it".
@@ -465,6 +485,9 @@ Harness and results: `/share/dev/bl002-work`.
 | `build: fork version 3.1.0-owner.20`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 | `feat(live): the live view plays in the NVR player`                                                                   | `<cgc-nvr-player live>`: the host's stream as its children (slot), the player's controls (Low / High from `liveStreams`, snapshot, mute via `nvr-mute`, full screen, actions), auto-hide, double-tap / pinch zoom, swipes (`nvr-swipe` with `live: true`), portrait from the host's video; slot `top` for the doorbell's talk bar. The gallery puts its single live view (overlay controls) in it: `_liveQuality` picks `<name>_sub` / `_main`, a swipe opens the next camera live (`cgc_view=live`, `cgc_live`, `cgc_fs`), the arrival takes the full screen over                                                                                                                                                                                | Owner 10-22: "why does the live stream player icons look different than streaming from the NVR? fix it"                                                                                                                                    |
 | `build: fork version 3.1.0-owner.21`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
+| `feat(timeline): pinch the track to zoom, whole day to a pixel a second`                                              | Continuous zoom (`fitPpm` … `MAX_PPM` 60 px/min) by pinch (two touches on the track), Ctrl + wheel and the buttons (×2); the moment stays under the playhead; the track is laid out in CSS variables (`--tl-ppm`, `--tl-half`) so a pinch only moves them; labels by `markStepMin` (6 h … 5 min); the zoom kept in `localStorage`                                                                                                                                                                                                                                                                                                                                                                                                                 | Owner 10-23: "the ability to zoom in and out in the timeline itself … show the full day, or zoom in to be able to scrub at a slower rate"                                                                                                  |
+| `feat: past either end of a day, on into the next`                                                                    | `ui/edge-flip.ts` (a user scroll reaching an end while moving toward it, a finger pulling on past it, the wheel pushing past it; held until the gesture ends) used by the Timeline's track (the day before / after with clips, landing a minute inside its other end) and the gallery's strip with `scrub_on_drag` (older toward the oldest end, landing on the new strip's other end; `thumb_sort_order` respected)                                                                                                                                                                                                                                                                                                                              | Owner 10-23: "when I scroll to either end of the timeline, either on the camera view or the timeline view, it should move me to the following or previous day"                                                                             |
+| `build: fork version 3.1.0-owner.22`                                                                                  | Version shown in the bundle banner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The live build                                                                                                                                                                                                                             |
 
 ## Build and test
 

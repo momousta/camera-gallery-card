@@ -169,6 +169,10 @@ A few notes on the generic walker:
 - Sensor mode: first-frame capture
 - Sensor mode GIF clips: a still first frame by default (`gif_thumbnails: still`). The card fetches only the head of each GIF with an HTTP `Range` request (typically 5–20 % of the file), and caches the still in IndexedDB, so a second visit needs no download at all. `gif_thumbnails: animated` loads and animates the whole GIF in every tile, as before
 - **Drag to scrub** (`scrub_on_drag: true`): press and drag the thumbnail strip; the viewer follows the thumb under the centre line (Ring / iOS Photos style). While you drag, the viewer shows the thumbnail; the clip loads, and a video plays, when you let go. A tap still selects; mouse drag and the mouse wheel scrub too
+- **On into the next day** (owner fork, with `scrub_on_drag`): scroll the strip past either end of the day and it goes
+  on into the neighbouring day with media. Past the oldest end you land on the day before, at its newest; past the
+  newest end, the day after, at its oldest. A finger pulling on past the end, or the wheel, does the same. The
+  timeline card's track behaves the same way (`ui/edge-flip.ts`)
 - **Previews next to the files** (`thumbnail_folder: thumbs`): the strip and scrubbing use small JPEG previews (10–30 KB) instead of the clips and photos themselves; the full file loads when you stop on it. With `preload_thumbnails: true` the day's previews, then the neighbouring days', load in the background, so scrolling never waits
 - **Calendar**: tap the date to pick a day from a month calendar; days with media are highlighted, the others can't be picked. A tap anywhere outside it closes it
 - **Paired image + video** — when a snapshot and clip share the same filename stem they're shown as one item, with the image used as the thumbnail
@@ -209,6 +213,12 @@ the page change, and the player covers it, so the next camera's player takes it 
 browser again (the Home Assistant app refuses a second request without a fresh touch). A camera without `nvr_channel` (a doorbell) shows
 its closest snapshot, and swiping on from it streams again. The list has the timeline card's `cameras` shape
 (`gallery_id` = each gallery's `url_id`, `navigation_path` = its page), so one YAML anchor serves both.
+
+**The timeline card's track** (owner fork): pinch it to zoom, from the whole day on the screen down to a pixel a
+second for slow scrubbing. Ctrl + wheel (or a trackpad pinch) and the − / + buttons zoom too. The moment stays
+under the playhead, the labels follow the zoom (every 6 h … every 5 min), and the phone remembers the zoom.
+Scrolling past either end of the day goes on into the day before or after (the nearest with clips), near its other
+end.
 
 **From the timeline card:** a tap on a camera opens that camera's page, this gallery, on the frame shown at the
 timeline's moment. Low / High there play from that moment, a swipe carries it on to the next camera, and Back
