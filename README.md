@@ -214,6 +214,43 @@ browser again (the Home Assistant app refuses a second request without a fresh t
 its closest snapshot, and swiping on from it streams again. The list has the timeline card's `cameras` shape
 (`gallery_id` = each gallery's `url_id`, `navigation_path` = its page), so one YAML anchor serves both.
 
+**Open the same moment in Reolink (experimental, Android only):** configure `reolink_app_entity` with the
+original HA Reolink camera entity, alongside `nvr_channel`, on a gallery or a Timeline camera entry. For example:
+
+```yaml
+nvr_channel: 7
+reolink_app_entity: camera.front_right_main
+```
+
+The separate open-in-app button uses the time of the picture shown: on the Timeline, each camera tile's own
+snapshot or event (not the playhead); in the gallery, the snapshot's timestamp; in a recording, the displayed clock
+after seeking. Live uses the current time. The card finds the parent NVR's UID (its serial
+number) in the device registry the HA frontend already holds, so a tap launches at once with no request; no
+credentials or NVR identifier belong in dashboard YAML. A Generic/Reostream camera is not suitable for this
+field: keep the original Reolink entity even when the live stream uses another entity.
+The link is the Reolink app's own alarm link, the one the owner's camera alerts already open on the phone:
+`https://reolink.com/ulink/alarm?uid=<Base64(SHA-256(NVR UID)), URL-encoded>&channel=<0-based>&timestamp=<epoch ms>`,
+sent as an Android intent for the `com.mcu.reolink` package so it never opens a browser. Within 2 minutes of the
+moment the app opens that camera live, otherwise its recording at that moment. The hash is computed in the card
+(`src/util/sha256.ts`, synchronous, so the tap stays inside the touch; `crypto.subtle` is missing on plain-HTTP
+pages). Push-style links (`intent://scan/…;scheme=reolink` with `S.ALM*` extras, or the `WelcomeActivity` variant)
+open only the app's camera list or live view since app 4.60.
+The shortcut is offered on Android only.
+
+**Phone full screen:** the shared player requests native document full screen with hidden navigation UI and locks
+orientation when the browser allows it. Android restrictions now show an explanation instead of silently
+pretending orientation changed. In Companion, set **Screen orientation** to **System** if a fixed app orientation
+prevents rotation. CSS cannot rotate or hide Android's system navigation bar.
+
+**Timeline loading:** unchanged FileTrack arrays reuse cached tracks across navigation. When one camera changes,
+only that camera's track is updated and existing items retain their parsed timestamps; visible previews have
+high fetch priority. This avoids repeatedly parsing thousands of files, but does not eliminate network/image
+loading time or establish a speed comparison with Ring.
+
+**Event glow on the Timeline:** a camera whose picture on screen is an event from the last five minutes glows in
+that event's track colour: person orange, car blue, dog green, doorbell visitor purple, motion grey. Routine
+stills (`snapshot_…`, `hourly_…`) never glow. The marks and the glow share the `--tl-k-<kind>` colours.
+
 **The timeline card's track** (owner fork): pinch it to zoom, from the whole day on the screen down to a pixel a
 second for slow scrubbing. Ctrl + wheel (or a trackpad pinch) and the − / + buttons zoom too. The moment stays
 under the playhead, the labels follow the zoom (every 6 h … every 5 min), and the phone remembers the zoom.
