@@ -6,6 +6,12 @@ export const timelineStyles = css`
     position: relative;
     --tl-gap: 8px;
     --tl-lane-h: 7px;
+    /* Event colours: the track's marks and the glow of a camera showing that event. */
+    --tl-k-person: #ff9800;
+    --tl-k-car: #42a5f5;
+    --tl-k-dog: #66bb6a;
+    --tl-k-visitor: #ab47bc;
+    --tl-k-motion: #9e9e9e;
     color: var(--primary-text-color);
   }
 
@@ -85,6 +91,30 @@ export const timelineStyles = css`
     grid-template-columns: repeat(var(--tl-cols, 2), minmax(0, 1fr));
     gap: var(--tl-gap);
   }
+  .tl-camera {
+    position: relative;
+    min-width: 0;
+  }
+  .tl-app {
+    position: absolute;
+    right: 6px;
+    top: 6px;
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    z-index: 2;
+    touch-action: manipulation;
+    &.icon {
+      width: 40px;
+      height: 40px;
+      min-width: 40px;
+    }
+    /* A finger-sized target (48 px) around the visible circle. */
+    &::before {
+      content: "";
+      position: absolute;
+      inset: -4px;
+    }
+  }
   @media (min-width: 900px) {
     .tl-grid {
       grid-template-columns: repeat(var(--tl-cols-wide, 4), minmax(0, 1fr));
@@ -92,7 +122,9 @@ export const timelineStyles = css`
   }
 
   .tl-tile {
+    display: block;
     position: relative;
+    width: 100%;
     aspect-ratio: 16 / 9;
     border-radius: 12px;
     overflow: hidden;
@@ -119,6 +151,24 @@ export const timelineStyles = css`
   }
   .tl-tile.stale .tl-img {
     opacity: 0.45;
+  }
+  .tl-tile.glow {
+    --tl-glow: var(--tl-k-motion);
+    box-shadow:
+      0 0 0 2px var(--tl-glow),
+      0 0 12px 2px var(--tl-glow);
+    &.k-person {
+      --tl-glow: var(--tl-k-person);
+    }
+    &.k-car {
+      --tl-glow: var(--tl-k-car);
+    }
+    &.k-dog {
+      --tl-glow: var(--tl-k-dog);
+    }
+    &.k-visitor {
+      --tl-glow: var(--tl-k-visitor);
+    }
   }
   .tl-empty {
     position: absolute;
@@ -242,23 +292,23 @@ export const timelineStyles = css`
     width: 3px;
     height: 100%;
     border-radius: 2px;
-    background: #9e9e9e;
+    background: var(--tl-k-motion);
     opacity: 0.8;
 
     &.k-person {
-      background: #ff9800;
+      background: var(--tl-k-person);
       opacity: 1;
     }
     &.k-car {
-      background: #42a5f5;
+      background: var(--tl-k-car);
       opacity: 1;
     }
     &.k-dog {
-      background: #66bb6a;
+      background: var(--tl-k-dog);
       opacity: 1;
     }
     &.k-visitor {
-      background: #ab47bc;
+      background: var(--tl-k-visitor);
       opacity: 1;
     }
   }

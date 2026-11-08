@@ -210,6 +210,7 @@ export interface InputConfig {
   preload_thumbnails?: boolean;
   preload_days?: number;
   nvr_channel?: number;
+  reolink_app_entity?: string;
   nvr_addon?: string;
   nvr_autoplay?: boolean;
   swipe_cameras?: { gallery_id?: string; navigation_path?: string; name?: string }[];

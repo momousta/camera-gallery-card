@@ -43,8 +43,18 @@ export function eventKind(src: string): EventKind {
   return "other";
 }
 
-/** Parse a sensor `fileList` (array, or a JSON string of one) into items sorted by time, oldest first. */
-export function buildTrack(fileList: unknown, pathFormat: string): TimelineItem[] {
+const tracksByList = new WeakMap<object, Map<string, TimelineItem[]>>();
+
+/** Sensor arrays are replaced on updates. Share their parsed tracks across camera-page navigation. */
+export function buildTrack(
+  fileList: unknown,
+  pathFormat: string,
+  previous: readonly TimelineItem[] = []
+): TimelineItem[] {
+  if (Array.isArray(fileList)) {
+    const cached = tracksByList.get(fileList)?.get(pathFormat);
+    if (cached) return cached;
+  }
   let list: unknown = fileList;
   if (typeof list === "string") {
     try {
@@ -54,17 +64,32 @@ export function buildTrack(fileList: unknown, pathFormat: string): TimelineItem[
     }
   }
   if (!Array.isArray(list) || !pathFormat) return [];
+  const existing = new Map(previous.map((item) => [item.src, item]));
   const seen = new Set<string>();
   const out: TimelineItem[] = [];
   for (const raw of list) {
     const src = toWebPath(raw);
     if (!src || seen.has(src) || isTemporaryFilePath(src)) continue;
+    const cached = existing.get(src);
+    if (cached) {
+      seen.add(src);
+      out.push(cached);
+      continue;
+    }
     const ms = dtMsFromSrc(src, { pathFormat });
     if (ms === null || !Number.isFinite(ms)) continue;
     seen.add(src);
     out.push({ src, ms, kind: eventKind(src) });
   }
   out.sort((a, b) => a.ms - b.ms || (a.src < b.src ? -1 : 1));
+  if (Array.isArray(fileList)) {
+    let formats = tracksByList.get(fileList);
+    if (!formats) {
+      formats = new Map();
+      tracksByList.set(fileList, formats);
+    }
+    formats.set(pathFormat, out);
+  }
   return out;
 }
 

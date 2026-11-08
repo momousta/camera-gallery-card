@@ -47,6 +47,7 @@ import { planPreload, ThumbPreloader } from "./data/preload";
 import { monthOf } from "./data/calendar";
 import { OutsidePress, renderCalendarPicker } from "./ui/calendar-picker";
 import { CameraActionController, cameraActionStyles, renderCameraActions } from "./ui/camera-actions";
+import { canOpenReolinkApp, openReolinkApp } from "./ui/reolink-app";
 // Owner fork: the live camera tile of the Cameras page (<camera-tile-card>), same bundle.
 import "./tile/camera-tile-card.js";
 import { calendarPickerStyles } from "./ui/calendar-picker-styles";
@@ -199,6 +200,7 @@ function formatVideoTime(seconds) {
     const mm = m < 10 ? `0${m}` : `${m}`;
     return `${h}:${mm}:${ss}`;
   }
+
   return `${m}:${ss}`;
 }
 
@@ -273,6 +275,7 @@ class CameraGalleryCard extends LitElement {
       _thumbMenuOpen: { type: Boolean },
       _viewMode: { type: String }, // "media" | "live"
       _liveMuted: { type: Boolean },
+      _reolinkError: { state: true },
       _liveFullscreen: { type: Boolean },
       _livePipActive: { type: Boolean },
       _galleryPipActive: { type: Boolean },
@@ -2341,6 +2344,16 @@ class CameraGalleryCard extends LitElement {
     if (this._liveCard) this._liveCard.muted = newMuted;
     const video = this._findLiveVideo();
     if (video) video.muted = newMuted;
+  }
+
+  async _openSelectedReolink(src) {
+    this._reolinkError = "";
+    try {
+      await openReolinkApp(this._hass, this.config.reolink_app_entity,
+        this._nvrChannel(), this._momentOf(src) ?? this._pipeline?.resolveItemMs?.(src));
+    } catch (err) {
+      this._reolinkError = err instanceof Error ? err.message : "Could not open Reolink.";
+    }
   }
 
   _toggleLiveFullscreen() {
@@ -6829,6 +6842,16 @@ class CameraGalleryCard extends LitElement {
                   : selectedIsVideo
                     ? html`<div id="preview-video-host" class="preview-video-host"></div>`
                     : html`<img class="pimg" src=${selectedUrl} alt="" style=${this._previewStillStyle(selected)} />`}
+            ${!nvrOn && !isLive && selected && canOpenReolinkApp(this.config?.reolink_app_entity, this._nvrChannel())
+              ? html`<button class="pnavbtn reolink-app" title="Open this camera and event in Reolink"
+                  aria-label="Open this camera and event in Reolink"
+                  style="position:absolute;top:8px;left:8px;z-index:3"
+                  @pointerdown=${(e) => e.stopPropagation()}
+                  @click=${(e) => { e.stopPropagation(); this._openSelectedReolink(selected); }}>
+                  <ha-icon icon="mdi:open-in-app"></ha-icon>
+                </button>`
+              : ""}
+            ${this._reolinkError ? html`<div role="alert">${this._reolinkError}</div>` : ""}
             ${nvrOn
               ? html`<cgc-nvr-player
                   .hass=${this._hass}
@@ -6839,6 +6862,7 @@ class CameraGalleryCard extends LitElement {
                   .poster=${this._nvr.poster}
                   .quiet=${!!this._nvr.quiet}
                   .fullscreen=${!!this._nvr.fullscreen}
+                  .reolinkEntity=${this.config?.reolink_app_entity}
                   .still=${this._nvr.still || ""}
                   .docfs=${true}
                   .actions=${camActions}
@@ -6878,6 +6902,7 @@ class CameraGalleryCard extends LitElement {
                 .liveStreams=${shown ? ["sub", "main"] : []}
                 .stream=${shown || "sub"}
                 .liveMuted=${!!this._liveMuted}
+                .reolinkEntity=${this.config?.reolink_app_entity}
                 @nvr-action=${(e) => this._onCameraAction(e.detail?.id)}
                 @nvr-mute=${() => { this._toggleLiveMute(); this.requestUpdate(); }}
                 @nvr-stream=${(e) => this._setLiveQuality(e.detail?.stream)}

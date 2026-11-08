@@ -2,6 +2,13 @@ import { css } from "lit";
 
 /** BL-008: the NVR player layer (covers its container: the gallery viewer or the timeline's full view). */
 export const nvrPlayerStyles = css`
+  .nvr-app {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 3;
+  }
   :host {
     position: absolute;
     inset: 0;

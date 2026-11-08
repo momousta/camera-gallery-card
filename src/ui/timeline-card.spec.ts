@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThumbPreloader } from "../data/preload";
+import { timelineStyles } from "../timeline/timeline-styles";
 
 // BL-007: every camera on one timeline.
 
@@ -99,6 +100,50 @@ async function settle(card: any, ms = 50) {
 }
 
 describe("tiles follow the shared moment", () => {
+  it("keeps camera buttons full width when wrapped for the app shortcut", () => {
+    const rule = timelineStyles.cssText.match(/\.tl-tile\s*\{([^}]+)\}/)?.[1];
+    expect(rule).toMatch(/display:\s*block\s*;/);
+    expect(rule).toMatch(/width:\s*100%\s*;/);
+  });
+
+  it("a camera showing an event glows in that event's track colour, for five minutes", async () => {
+    const card = await render();
+    const glows = () =>
+      $$(card, ".tl-tile").map((t) =>
+        [...t.classList].filter((c) => c === "glow" || c.startsWith("k-")).join(" ")
+      );
+    const atT = async (t: number) => {
+      card._setT(t);
+      await card.updateComplete;
+      return glows();
+    };
+    // Front, Back, Doorbell. Front: a car at 12:45; Back: a person at 09:00, hours before.
+    expect(await atT(at(12, 47))).toEqual(["glow k-car", "", ""]);
+    expect(await atT(at(9, 0))).toEqual(["", "glow k-person", ""]);
+    // The doorbell's visitor at 13:10; the car is 27 minutes old by then.
+    expect(await atT(at(13, 12))).toEqual(["", "", "glow k-visitor"]);
+    // Front's motion at 13:30: still glowing at 4 minutes, not at 6.
+    expect(await atT(at(13, 34))).toEqual(["glow k-motion", "", ""]);
+    expect(await atT(at(13, 36))).toEqual(["", "", ""]);
+    // Routine stills never glow (the doorbell's 13:55 snapshot).
+    expect(await atT(at(13, 56))).toEqual(["", "", ""]);
+  });
+
+  it("the glow and the track's marks share one set of event colours", () => {
+    const text = timelineStyles.cssText;
+    for (const kind of ["person", "car", "dog", "visitor"]) {
+      expect(text).toMatch(new RegExp(`--tl-k-${kind}:\\s*#[0-9a-f]{6};`));
+      expect(text).toMatch(
+        new RegExp(`&\\.k-${kind}\\s*\\{\\s*--tl-glow:\\s*var\\(--tl-k-${kind}\\);`)
+      );
+      expect(text).toMatch(
+        new RegExp(`&\\.k-${kind}\\s*\\{\\s*background:\\s*var\\(--tl-k-${kind}\\);`)
+      );
+    }
+    expect(text).toMatch(/--tl-glow:\s*var\(--tl-k-motion\);/);
+    expect(text).toMatch(/background:\s*var\(--tl-k-motion\);/);
+  });
+
   it("opens on today at now, each camera on its latest frame", async () => {
     const card = await render();
     expect(card._day).toBe("2026-10-19");
@@ -337,6 +382,20 @@ describe("scrolling past either end of the day (owner 10-23)", () => {
 });
 
 describe("days", () => {
+  it("opens a gallery snapshot at its own time, or the carried timeline moment", async () => {
+    const open = vi.spyOn(await import("./reolink-app"), "openReolinkApp").mockResolvedValue();
+    const gallery: any = document.createElement("camera-gallery-card");
+    gallery.config = { reolink_app_entity: "camera.front_main", nvr_channel: 6 };
+    gallery._hass = hassWith(FILES);
+    const src = L("front", "car_20261019_124500_snapshot.jpg");
+    gallery._pipeline = { resolveItemMs: () => at(12, 45) };
+    await gallery._openSelectedReolink(src);
+    expect(open).toHaveBeenLastCalledWith(gallery._hass, "camera.front_main", 6, at(12, 45));
+    gallery._moment = { src, time: at(12, 50) };
+    await gallery._openSelectedReolink(src);
+    expect(open).toHaveBeenLastCalledWith(gallery._hass, "camera.front_main", 6, at(12, 50));
+  });
+
   it("the arrows step between days with clips and the calendar picks one", async () => {
     const card = await render();
     const prev = $(card, '.tl-date .tl-btn[aria-label="Previous day"]') as HTMLButtonElement;
@@ -428,6 +487,43 @@ describe("opening a camera: its own page, the one viewer (owner 10-20)", () => {
 });
 
 describe("preloading and updates", () => {
+  it("reuses unchanged camera tracks and parses only the updated sensor", async () => {
+    const card = await render();
+    const tracks = [...card._tracks];
+    const revision = card._rev;
+    card._rebuild();
+    expect(card._rev).toBe(revision);
+    const files = {
+      ...FILES,
+      "sensor.ft_front": [...FILES["sensor.ft_front"]!, W("front", "person_20261019_135900.gif")],
+    };
+    card.hass = hassWith(files);
+    await card.updateComplete;
+    expect(card._tracks[0]).not.toBe(tracks[0]);
+    expect(card._tracks[1]).toBe(tracks[1]);
+    expect(card._tracks[2]).toBe(tracks[2]);
+    expect(card._tracks[0].find((i: { src: string }) => i.src === tracks[0][0].src)).toBe(
+      tracks[0][0]
+    );
+    const another = await render({}, files);
+    expect(another._tracks[0]).toBe(card._tracks[0]);
+  });
+
+  it("offers a separate Android app button at the shown picture's own time, not the playhead's", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Android" });
+    const card = await render({
+      cameras: [{ ...CONFIG.cameras[0], reolink_app_entity: "camera.front_main", nvr_channel: 6 }],
+    });
+    const open = vi.spyOn(card, "_openReolink").mockResolvedValue(undefined);
+    const camera = vi.spyOn(card, "_openCamera");
+    card._setT(at(13, 40)); // Front shows its 13:30 motion picture
+    await card.updateComplete;
+    $(card, ".tl-app").click();
+    expect(open).toHaveBeenCalledWith(card.config.cameras[0], at(13, 30));
+    expect(camera).not.toHaveBeenCalled();
+    expect($(card, ".tl-img").getAttribute("fetchpriority")).toBe("high");
+  });
+
   it("preloads the day's previews of every camera, nearest the moment first", async () => {
     const calls: { src: string; url: string }[][] = [];
     vi.spyOn(ThumbPreloader.prototype, "setQueue").mockImplementation(function (entries) {

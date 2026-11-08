@@ -69,6 +69,7 @@ import {
 } from "./nvr-api";
 import { cameraActionStyles, renderCameraActions } from "../ui/camera-actions";
 import { deepVideo } from "../ui/live-poster";
+import { canOpenReolinkApp, openReolinkApp } from "../ui/reolink-app";
 import { nvrPlayerStyles } from "./nvr-player-styles";
 
 const TAG = "cgc-nvr-player";
@@ -302,6 +303,7 @@ export class CgcNvrPlayer extends LitElement {
       live: { type: Boolean },
       liveStreams: { attribute: false },
       liveMuted: { type: Boolean },
+      reolinkEntity: { attribute: false },
       _phase: { state: true },
       _status: { state: true },
       _error: { state: true },
@@ -1510,6 +1512,24 @@ export class CgcNvrPlayer extends LitElement {
     if (ms) this._toastTimer = setTimeout(() => (this._toast = null), ms);
   }
 
+  async _openReolink() {
+    const moment = this._phase === "live" ? Date.now()
+      : this._phase === "still" ? this.time : (this._clock ?? this.time);
+    try {
+      await openReolinkApp(this.hass, this.reolinkEntity, this.channel, moment);
+    } catch (err) {
+      this._showToast(err instanceof Error ? err.message : "Could not open Reolink.", "err");
+    }
+  }
+
+  _renderReolink() {
+    if (!canOpenReolinkApp(this.reolinkEntity, this.channel)) return "";
+    return html`<button class="nvr-icon nvr-app" title="Open this camera and time in Reolink"
+      aria-label="Open this camera and time in Reolink" @click=${() => this._openReolink()}>
+      <ha-icon icon="mdi:open-in-app"></ha-icon>
+    </button>`;
+  }
+
   /** A horizontal swipe on the picture: the host may move to the next (1) or previous (-1) camera. */
   _swipe(dir) {
     const video = this._video();
@@ -1584,6 +1604,8 @@ export class CgcNvrPlayer extends LitElement {
       this._setPseudo(true);
       this._docFsOn = await enterDocFs();
       if (this._docFsOn && this._pseudo) this._lockOrientation();
+      if (!this._docFsOn && /Android/i.test(navigator.userAgent))
+        this._showToast("This app did not allow native full screen; the phone's system bars may remain.", "err", 6000);
       return true;
     }
     const el = this.renderRoot?.querySelector(".nvr");
@@ -1593,12 +1615,7 @@ export class CgcNvrPlayer extends LitElement {
       this._fsAsked = true;
       await request.call(el, { navigationUI: "hide" });
       // Chrome turns the screen; a WebView (the Home Assistant app) can't, and the picture is turned instead.
-      await screen.orientation
-        ?.lock?.(this._portraitContent() ? "portrait" : "landscape")
-        .then(() => {
-          this._locked = true;
-        })
-        .catch(() => {});
+      await this._lockOrientation();
       return true;
     } catch {
       this._fsAsked = false; // not allowed for an element here (or no recent touch)
@@ -1655,13 +1672,16 @@ export class CgcNvrPlayer extends LitElement {
     );
   }
 
-  _lockOrientation() {
-    screen.orientation
-      ?.lock?.(this._portraitContent() ? "portrait" : "landscape")
-      .then(() => {
-        this._locked = true;
-      })
-      .catch(() => {});
+  async _lockOrientation() {
+    try {
+      if (!screen.orientation?.lock) throw new Error("Orientation locking is unavailable");
+      await screen.orientation.lock(this._portraitContent() ? "portrait" : "landscape");
+      this._locked = true;
+    } catch (err) {
+      console.warn("Camera Gallery: screen orientation lock failed", err);
+      if (/Android/i.test(navigator.userAgent))
+        this._showToast("Rotate the phone. If it stays upright, set Companion App > Screen orientation to System.", "err", 6000);
+    }
   }
 
   _stopMotion() {
@@ -1801,6 +1821,7 @@ export class CgcNvrPlayer extends LitElement {
               </div>`
             : ""}
           <div class="nvr-ui ${shown ? "shown" : ""}">
+            ${this._renderReolink()}
             ${this.bare && !this._fullscreen
               ? /* inline, the host shows its own Low / High and close; full screen hides them, so the player's
                  * own bar is there (one bar for every host) */

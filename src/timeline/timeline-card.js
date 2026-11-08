@@ -55,6 +55,7 @@ import {
   ZOOM_STEP,
 } from "./timeline-data";
 import { EdgeFlip } from "../ui/edge-flip";
+import { canOpenReolinkApp, openReolinkApp } from "../ui/reolink-app";
 import { timelineStyles } from "./timeline-styles";
 
 const TAG = "camera-timeline-card";
@@ -63,6 +64,8 @@ export const TIMELINE_SPEEDS = [60, 300, 900];
 const SPEED_LABELS = ["1 min/s", "5 min/s", "15 min/s"];
 /** A frame older than this at the moment shown is dimmed. */
 const STALE_MS = 30 * 60_000;
+/** A camera whose frame shown is an event this recent glows in the event's track colour. */
+const GLOW_MS = 5 * 60_000;
 /** Re-plan the preloading when the moment moves this far from the last plan. */
 const REPLAN_MS = 45 * 60_000;
 const PRELOAD_CONCURRENCY = 4;
@@ -103,6 +106,7 @@ export class CameraTimelineCard extends LitElement {
       _calMonth: { state: true },
       _half: { state: true },
       _rev: { state: true },
+      _appError: { state: true },
     };
   }
 
@@ -135,6 +139,7 @@ export class CameraTimelineCard extends LitElement {
     );
     this._half = 0;
     this._rev = 0;
+    this._appError = "";
     this._needsScrollSync = true;
     this._scrollRaf = 0;
     this._playRaf = 0;
@@ -171,6 +176,7 @@ export class CameraTimelineCard extends LitElement {
       cameras: cams,
     };
     this._refs = new Map();
+    this._tracks = [];
     this._rebuild();
   }
 
@@ -224,12 +230,16 @@ export class CameraTimelineCard extends LitElement {
   _rebuild() {
     if (!this.config) return;
     const fmt = this.config.path_datetime_format;
-    this._refs = new Map();
-    this._tracks = this.config.cameras.map((c) => {
+    let changed = this._tracks.length !== this.config.cameras.length;
+    this._tracks = this.config.cameras.map((c, index) => {
       const ref = this._hass?.states?.[c.entity]?.attributes?.fileList;
+      if (this._refs.has(c.entity) && this._refs.get(c.entity) === ref && this._tracks[index])
+        return this._tracks[index];
+      changed = true;
       this._refs.set(c.entity, ref);
-      return buildTrack(ref, fmt);
+      return buildTrack(ref, fmt, this._tracks[index]);
     });
+    if (!changed) return;
     this._days = daysWithItems(this._tracks);
     const newest = this._days[0] ?? dayKeyOf(Date.now());
     if (!this._day || (!this._userMoved && this._day !== newest)) this._setDay(newest);
@@ -636,6 +646,17 @@ export class CameraTimelineCard extends LitElement {
     this._calOpen = true;
   }
 
+  /** Opens the Reolink app at `ms`: the time of the picture the camera's tile shows (owner 11-08). */
+  async _openReolink(cam, ms) {
+    this._pause();
+    this._appError = "";
+    try {
+      await openReolinkApp(this._hass, cam.reolink_app_entity, cam.nvr_channel, ms);
+    } catch (err) {
+      this._appError = err instanceof Error ? err.message : "Could not open Reolink.";
+    }
+  }
+
   // ── render ───────────────────────────────────────────────────────────
 
   willUpdate() {
@@ -660,6 +681,7 @@ export class CameraTimelineCard extends LitElement {
     return html`
       <ha-card>
         <div class="tl-root">
+          ${this._appError ? html`<div role="alert">${this._appError}</div>` : ""}
           <div class="tl-head">
             <div class="tl-date">
               <button
@@ -786,11 +808,12 @@ export class CameraTimelineCard extends LitElement {
     const url = this._tileUrl(item);
     const age = t - item.ms;
     const stale = age > STALE_MS;
+    const glow = MARK_KINDS.has(item.kind) && age <= GLOW_MS ? `glow k-${item.kind}` : "";
     const under = this._lastFrame.get(ci);
     const locale = this._hass?.locale;
     const icon = KIND_ICON[item.kind];
-    return html`<button
-      class="tl-tile ${stale ? "stale" : ""}"
+    return html`<div class="tl-camera"><button
+      class="tl-tile ${stale ? "stale" : ""} ${glow}"
       title=${cam.navigation_path ? `Open ${name}` : name}
       @click=${() => {
         this._pause();
@@ -802,6 +825,8 @@ export class CameraTimelineCard extends LitElement {
             class="tl-img"
             src=${url}
             alt=""
+            decoding="async"
+            fetchpriority="high"
             style=${under && under !== url ? `background-image:url("${under}")` : ""}
             @load=${() => this._lastFrame.set(ci, url)}
             @error=${() => this._onPreviewError(item.src)}
@@ -814,7 +839,14 @@ export class CameraTimelineCard extends LitElement {
         >
         ${icon ? html`<ha-icon class="tl-kind" icon=${icon}></ha-icon>` : ""}
       </div>
-    </button>`;
+    </button>
+    ${canOpenReolinkApp(cam.reolink_app_entity, cam.nvr_channel)
+      ? html`<button class="tl-app tl-btn icon" title="Open this picture's time in Reolink"
+          aria-label="Open this picture's time in Reolink" @click=${() => this._openReolink(cam, item.ms)}>
+          <ha-icon icon="mdi:open-in-app"></ha-icon>
+        </button>`
+      : ""}
+    </div>`;
   }
 
   updated() {

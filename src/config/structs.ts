@@ -539,6 +539,7 @@ export const cameraGalleryCardConfigStruct = type({
   // BL-008: this camera's NVR channel. Adds Low / High buttons that play the NVR's recording from the selected
   // item's moment, through the NVR Playback add-on (`nvr_addon`, its slug).
   nvr_channel: optional(intInRange(0, 63)),
+  reolink_app_entity: optional(string()),
   nvr_addon: defaulted(string(), DEFAULT_NVR_ADDON),
   // BL-008: letting the scrolled strip come to rest plays the NVR's Low stream of that moment, quietly.
   nvr_autoplay: defaulted(boolean(), true),

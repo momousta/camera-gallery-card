@@ -83,6 +83,46 @@ const events = (el: any, name: string) => {
 };
 
 describe("<cgc-nvr-player live>", () => {
+  it("shows the Android Reolink shortcut in live and still modes without rebuilding the live stream", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Android" });
+    const child = liveChild();
+    const el = await mount({ reolinkEntity: "camera.front_main", channel: 7 }, child);
+    const open = vi.spyOn(el, "_openReolink").mockResolvedValue(undefined);
+    q(el, ".nvr-app").click();
+    expect(open).toHaveBeenCalledOnce();
+    expect(el.contains(child.wrap)).toBe(true);
+    el.live = false;
+    el.still = "/local/snapshot.jpg";
+    el.time = NOW.getTime() - 60000;
+    await el.updateComplete;
+    expect(q(el, ".nvr-app")).not.toBeNull();
+  });
+
+  it("reports an Android orientation restriction instead of pretending the phone rotated", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Android" });
+    const el = await mount();
+    const lock = vi.fn().mockRejectedValue(new Error("not supported in WebView"));
+    vi.stubGlobal("screen", { orientation: { lock } });
+    await el._lockOrientation();
+    await el.updateComplete;
+    expect(el._locked).not.toBe(true);
+    expect(q(el, ".nvr-toast").textContent).toContain("Screen orientation to System");
+  });
+
+  it("opens a recording at the displayed playback clock after seeking", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Android" });
+    const open = vi.spyOn(await import("./reolink-app"), "openReolinkApp").mockResolvedValue();
+    const el = await mount({ reolinkEntity: "camera.front_right_main", channel: 7 });
+    el._phase = "playing";
+    el._clock = 1792501234000;
+    await el._openReolink();
+    expect(open).toHaveBeenCalledWith(el.hass, "camera.front_right_main", 7, 1792501234000);
+    el.time = 1792509999000;
+    el._phase = "still";
+    await el._openReolink();
+    expect(open).toHaveBeenLastCalledWith(el.hass, "camera.front_right_main", 7, 1792509999000);
+  });
+
   it("shows the host's stream with the recording's controls: Low / High, snapshot, mute, full screen", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
