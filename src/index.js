@@ -53,7 +53,7 @@ import "./tile/camera-tile-card.js";
 import { calendarPickerStyles } from "./ui/calendar-picker-styles";
 // BL-007: the multi-camera timeline card ships in the same bundle (<camera-timeline-card>).
 import "./timeline/timeline-card.js";
-import { warmNvr } from "./nvr/nvr-player.js";
+import { nvrAddonBase, warmNvr } from "./nvr/nvr-player.js";
 import { TurnWatcher, portraitScreen, unturn } from "./util/landscape";
 import { DEFAULT_NVR_ADDON, nvrChannelOf } from "./nvr/nvr-api";
 import { ItemPipelineClient } from "./data/item-pipeline";
@@ -95,6 +95,8 @@ import {
   sortPillsByOrder,
 } from "./data/pill-catalog";
 import { WebRtcMicClient } from "./data/webrtc-mic";
+import { MicRouter } from "./data/mic-router";
+import { NvrTalkClient } from "./data/nvr-talk";
 import {
   detectPtzType,
   detectPtzButtons,
@@ -398,7 +400,15 @@ class CameraGalleryCard extends LitElement {
     // confirmation flash on a one-shot action.
     this._ptzHomePressed = false;
     this._ptzHomePressedTimer = null;
-    this._micClient = new WebRtcMicClient({
+    const onMicChange = () => {
+      const next = this._micClient.state();
+      if (next !== this._micState) this._micState = next;
+      const errCode = this._micClient.error()?.code ?? "";
+      if (errCode !== this._micErrorCode) this._micErrorCode = errCode;
+      this._scheduleMicLevelRaf();
+      this.requestUpdate();
+    };
+    const webrtcMic = new WebRtcMicClient({
       inputs: {
         signPath: (path) =>
           this._hass
@@ -421,18 +431,21 @@ class CameraGalleryCard extends LitElement {
           }
         },
       },
-      onChange: () => {
-        const next = this._micClient.state();
-        if (next !== this._micState) this._micState = next;
-        const errCode = this._micClient.error()?.code ?? "";
-        if (errCode !== this._micErrorCode) this._micErrorCode = errCode;
-        this._scheduleMicLevelRaf();
-        this.requestUpdate();
-      },
+      onChange: onMicChange,
       audioProcessing: this._micAudioProcessingFromConfig(),
       iceServers: this._micIceServersFromConfig(),
       iceTransportPolicy: this.config?.live_mic_force_relay ? "relay" : "all",
     });
+    // Owner fork: `nvr:<channel>` mics talk through the NVR, with the NVR Playback add-on.
+    const nvrMic = new NvrTalkClient({
+      resolveBase: () =>
+        this._hass
+          ? nvrAddonBase(this._hass, this.config?.nvr_addon)
+          : Promise.reject(new Error("hass not ready")),
+      onChange: onMicChange,
+      audioProcessing: this._micAudioProcessingFromConfig(),
+    });
+    this._micClient = new MicRouter(webrtcMic, nvrMic);
     this._autoAspectVideo = null;
     this._autoAspectObs = null;
     this._liveQuickSwitchTimer = null;
@@ -2861,7 +2874,8 @@ class CameraGalleryCard extends LitElement {
     }
   }
 
-  // Mic state lives in `this._micClient` (a WebRtcMicClient). The card just
+  // Mic state lives in `this._micClient` (a MicRouter over a WebRtcMicClient
+  // and, for `nvr:<channel>` targets, an NvrTalkClient). The card just
   // mirrors `state()` / `error()` into reactive Lit properties via the
   // client's `onChange` callback so the render branches stay declarative.
 

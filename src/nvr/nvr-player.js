@@ -130,6 +130,16 @@ export async function warmNvr(hass, addon, channel) {
   }
 }
 
+/**
+ * The add-on's ingress URL with this page's ingress session in place: the card's talk button opens the add-on's
+ * talk WebSocket there (data/nvr-talk.ts), and a WebSocket can only bring the session as its cookie.
+ */
+export async function nvrAddonBase(hass, addon) {
+  const base = await locator.base(hass, addon || DEFAULT_NVR_ADDON);
+  await session.ensure(hass);
+  return base;
+}
+
 /** hls.js from the add-on, once per page (the UMD build sets window.Hls). */
 function loadHlsJs(base) {
   if (window.Hls) return Promise.resolve(window.Hls);
