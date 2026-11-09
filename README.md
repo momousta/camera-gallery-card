@@ -856,6 +856,24 @@ live_mic_ice_servers:
 # live_mic_force_relay: true   # only if direct ICE never succeeds
 ```
 
+**Talk through a Reolink NVR (owner fork 3.1.0-owner.28).** A camera behind a Reolink NVR has no RTSP back
+channel for go2rtc, but the NVR relays talk to its cameras over its own protocol, the way the Reolink app does. Give
+such a camera the mic value `nvr:<channel>` (its 0-based NVR channel, as `nvr_channel`):
+
+```yaml
+nvr_channel: 4
+live_camera_entities:
+  - camera.backyard_left_main
+live_mic_streams:
+  camera.backyard_left_main: "nvr:4"
+```
+
+The talk button then sends the microphone (16 kHz mono 16-bit PCM, 64 ms messages) over a WebSocket to the NVR
+Playback add-on (`nvr_addon`, default `local_nvr_playback`, version 0.5.0+) through Home Assistant ingress, which
+encodes it as the cameras' IMA ADPCM and talks through the NVR. No go2rtc stream, WebRTC integration or camera
+login is involved, and other mic values keep using go2rtc. The add-on allows one talker per camera and ends a talk
+after 20 s without audio or 10 minutes. `live_mic_mode` and `live_mic_audio_processing` apply as usual.
+
 **Caveat for `live_stream_urls` (synthetic ids).** When you put mic config on a stream-URL entry, the key is `__cgc_stream_<N>__` where `N` is the position in `live_stream_urls`. If you reorder the array, the keys point at the wrong streams. Use the editor (it re-binds the inputs to the visible names) or stick to entity-keyed entries for stability.
 
 See the [Two-way audio YAML example](#two-way-audio-talkback) for a working config.
