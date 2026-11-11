@@ -238,9 +238,11 @@ open only the app's camera list or live view since app 4.60.
 The shortcut is offered on Android only.
 
 **Phone full screen:** the shared player requests native document full screen with hidden navigation UI and locks
-orientation when the browser allows it. Android restrictions now show an explanation instead of silently
-pretending orientation changed. In Companion, set **Screen orientation** to **System** if a fixed app orientation
-prevents rotation. CSS cannot rotate or hide Android's system navigation bar.
+orientation when the browser allows it. The Home Assistant Android app can't turn the screen for a page (its
+WebView refuses the lock; in full screen it hides the system bars but keeps its own **Screen orientation** setting,
+System by default, which follows the phone's Auto-rotate). So in the app the screen turns with the phone only when
+Auto-rotate is on; otherwise the picture is turned on the upright screen, and after 3 s the player says how to turn
+the screen (owner.29). CSS cannot rotate or hide Android's system navigation bar.
 
 **Timeline loading:** unchanged FileTrack arrays reuse cached tracks across navigation. When one camera changes,
 only that camera's track is updated and existing items retain their parsed timestamps; visible previews have
@@ -873,6 +875,10 @@ Playback add-on (`nvr_addon`, default `local_nvr_playback`, version 0.5.0+) thro
 encodes it as the cameras' IMA ADPCM and talks through the NVR. No go2rtc stream, WebRTC integration or camera
 login is involved, and other mic values keep using go2rtc. The add-on allows one talker per camera and ends a talk
 after 20 s without audio or 10 minutes. `live_mic_mode` and `live_mic_audio_processing` apply as usual.
+
+In the owner fork's live player (camera pages), talk is a small mic button beside the speaker button (owner.29),
+for every mic value, go2rtc or NVR: outlined when idle, pulsing while it connects, red while talking (the controls
+stay in sight), crossed out after a failure (the reason shows at the top). Other live views keep the talk bar.
 
 **Caveat for `live_stream_urls` (synthetic ids).** When you put mic config on a stream-URL entry, the key is `__cgc_stream_<N>__` where `N` is the position in `live_stream_urls`. If you reorder the array, the keys point at the wrong streams. Use the editor (it re-binds the inputs to the visible names) or stick to entity-keyed entries for stability.
 
