@@ -505,4 +505,13 @@ export const nvrPlayerStyles = css`
   .nvr-icon ha-icon {
     --mdc-icon-size: 18px;
   }
+  .nvr-talk.active {
+    background: rgba(220, 38, 38, 0.92);
+  }
+  .nvr-talk.connecting ha-icon {
+    animation: nvr-rec 0.6s ease-in-out infinite alternate;
+  }
+  .nvr-talk.error {
+    background: rgba(127, 29, 29, 0.9);
+  }
 `;

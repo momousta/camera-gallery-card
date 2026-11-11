@@ -20,13 +20,15 @@
  *   live (owner 10-22: the host's live stream, given as the player's children, in this same viewer: its
  *   controls, full screen, turn, zoom and swipes; the host keeps the stream itself. `liveStreams` lists the
  *   qualities it has ("sub" Low, "main" High: Low / High shows when it has both), `stream` the one shown,
- *   `liveMuted` whether it is muted. Children with slot="top" lie over the picture, always shown (the doorbell's
- *   talk bar). Snapshot saves the frame on screen; no recording)
+ *   `liveMuted` whether it is muted, `liveTalk` the host's talk ("" none, else "idle", "connecting", "active" or
+ *   "error": a mic button beside the speaker). Children with slot="top" lie over the picture, always shown (talk
+ *   errors). Snapshot saves the frame on screen; no recording)
  * Events (bubbling, composed):
  *   nvr-close: the viewer asked to go back to the snapshots; { quiet: true } when a quiet start failed
  *   nvr-stream: { stream } the viewer switched between Low and High ({ stream, live: true } in live: the host
  *     switches its stream)
  *   nvr-mute: { muted } live: the viewer asked to mute or unmute (the host owns the stream)
+ *   nvr-talk: { down } live: the mic button was pressed (true) or let go (false); the host owns the microphone
  *   nvr-action: { id } a camera action button was pressed (the host calls the service)
  *   nvr-reveal: a quiet player started playing and showed itself
  *   nvr-fullscreen: { fullscreen, pseudo } the player went in or out of full screen (pseudo: the browser has no
@@ -79,6 +81,7 @@ const KEEPALIVE_MS = 15_000;
 const LIVE_EDGE_MS = 20_000;
 const WARM_EVERY_MS = 10 * 60_000; // the add-on keeps a listed day for hours
 const UI_HIDE_MS = 1800; // while playing, the controls hide this long after the last touch
+const ROTATE_HINT_MS = 3000; // full screen still upright this long after it began: how to turn the screen
 const SEEK_STEP_S = 10;
 const TAP_MS = 300; // a second tap within this is a double tap (so a single tap acts this much later)
 const SKIP_S = 10; // a double tap on a side: back or forward this much
@@ -313,6 +316,7 @@ export class CgcNvrPlayer extends LitElement {
       live: { type: Boolean },
       liveStreams: { attribute: false },
       liveMuted: { type: Boolean },
+      liveTalk: { type: String },
       reolinkEntity: { attribute: false },
       _phase: { state: true },
       _status: { state: true },
@@ -363,6 +367,7 @@ export class CgcNvrPlayer extends LitElement {
     this.live = false;
     this.liveStreams = [];
     this.liveMuted = true;
+    this.liveTalk = "";
     this._livePortrait = false;
     this._liveTimer = 0;
     this._docFsOn = false; // the document is full screen for this player
@@ -489,6 +494,10 @@ export class CgcNvrPlayer extends LitElement {
       // The host's quality (a press shows at once; the host follows with `stream`).
       if (isNvrStream(this.stream) && (entering || changed.has("stream")))
         this._active = this.stream;
+      if (changed.has("liveTalk")) {
+        if (this._talking()) this._showUi(false);
+        else if (this._ui) this._armHide();
+      }
       return;
     }
     if (this._phase === "live") {
@@ -911,7 +920,7 @@ export class CgcNvrPlayer extends LitElement {
     clearTimeout(this._hideTimer);
     this._hideTimer = setTimeout(() => {
       const video = this._video();
-      if (this._drag) return;
+      if (this._drag || this._talking()) return; // while talking, the mic button stays in sight
       if (
         this._phase !== "still" &&
         this._phase !== "live" &&
@@ -1152,7 +1161,7 @@ export class CgcNvrPlayer extends LitElement {
       this._phase === "still" ||
       this._phase === "live" ||
       (video && !video.paused && this._phase === "playing");
-    if (this._ui && moving && !this._drag) {
+    if (this._ui && moving && !this._drag && !this._talking()) {
       clearTimeout(this._hideTimer);
       this._ui = false;
     } else {
@@ -1184,6 +1193,16 @@ export class CgcNvrPlayer extends LitElement {
     if (!video) return;
     video.muted = !video.muted;
     this._muted = video.muted;
+    this._showUi();
+  }
+
+  _talking() {
+    return this._phase === "live" && (this.liveTalk === "active" || this.liveTalk === "connecting");
+  }
+
+  _talk(e, down) {
+    e.stopPropagation();
+    this.dispatchEvent(new CustomEvent("nvr-talk", { detail: { down }, bubbles: true, composed: true }));
     this._showUi();
   }
 
@@ -1689,8 +1708,12 @@ export class CgcNvrPlayer extends LitElement {
       this._locked = true;
     } catch (err) {
       console.warn("Camera Gallery: screen orientation lock failed", err);
+      // The Home Assistant app can't turn the screen for a page; it turns with the phone when Auto-rotate is on.
       if (/Android/i.test(navigator.userAgent))
-        this._showToast("Rotate the phone. If it stays upright, set Companion App > Screen orientation to System.", "err", 6000);
+        setTimeout(() => {
+          if (this._fullscreen && portraitScreen() && !this._portraitContent())
+            this._showToast("To turn the screen, switch on Auto-rotate (Quick Settings), then turn the phone.", "err", 6000);
+        }, ROTATE_HINT_MS);
     }
   }
 
@@ -1947,6 +1970,7 @@ export class CgcNvrPlayer extends LitElement {
       >
         <ha-icon icon="mdi:camera-outline"></ha-icon>
       </button>
+      ${this.liveTalk ? this._renderTalk() : ""}
       <button
         class="nvr-icon nvr-mute"
         title=${muted ? "Unmute" : "Mute"}
@@ -1957,6 +1981,43 @@ export class CgcNvrPlayer extends LitElement {
       </button>
       ${this._renderFullscreen()}
     </div>`;
+  }
+
+  /** Live: the host's talk (its microphone to the camera): idle, connecting, talking (red), or failed (try again). */
+  _renderTalk() {
+    const state = this.liveTalk;
+    const label =
+      state === "active"
+        ? "Stop talking"
+        : state === "connecting"
+          ? "Connecting the microphone"
+          : state === "error"
+            ? "Talk (try again)"
+            : "Talk";
+    const icon =
+      state === "active" || state === "connecting"
+        ? "mdi:microphone"
+        : state === "error"
+          ? "mdi:microphone-off"
+          : "mdi:microphone-outline";
+    const key = (e, down) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      if (!e.repeat) this._talk(e, down);
+    };
+    return html`<button
+      class="nvr-icon nvr-talk ${state}"
+      title=${label}
+      aria-label=${label}
+      aria-pressed=${state === "active" ? "true" : "false"}
+      @pointerdown=${(e) => this._talk(e, true)}
+      @pointerup=${(e) => this._talk(e, false)}
+      @pointercancel=${(e) => this._talk(e, false)}
+      @keydown=${(e) => key(e, true)}
+      @keyup=${(e) => key(e, false)}
+    >
+      <ha-icon icon=${icon}></ha-icon>
+    </button>`;
   }
 
   _renderZoomChip() {

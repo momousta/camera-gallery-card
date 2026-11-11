@@ -109,11 +109,13 @@ describe("live fullscreen gallery chrome", () => {
     expect(preview.matches(hidden)).toBe(false);
     expect(preview.querySelector("#live-card-host")).not.toBeNull();
     // Owner fork (10-22): the live view's controls are the player's (cgc-nvr-player live), which holds the
-    // stream, the talk bar and the camera chevrons.
-    for (const selector of ["cgc-nvr-player.live-player", ".mic-talkback-bar", ".pnav"]) {
+    // stream and the camera chevrons; owner.29: talk is its mic button beside the speaker, no talk bar.
+    for (const selector of ["cgc-nvr-player.live-player", ".pnav"]) {
       expect(preview.querySelector(selector)).not.toBeNull();
       expect(preview.querySelector(selector).matches(hidden)).toBe(false);
     }
+    expect(preview.querySelector(".mic-talkback-bar")).toBeNull();
+    expect(preview.querySelector("cgc-nvr-player.live-player").liveTalk).toBe("idle");
     // Chrome-only styles are scoped to fullscreen; exiting restores the same
     // gallery elements rather than deleting or rebuilding their state.
     card.setAttribute("data-live-fs", "");

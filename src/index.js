@@ -550,25 +550,11 @@ class CameraGalleryCard extends LitElement {
     this._micFreqBuf = new Uint8Array(256); // fftSize/2 — freq-domain bins
     this._onMicPointerDown = (e) => {
       e.stopPropagation();
-      // Resolve the mic stream for the camera that's currently in focus.
-      // Different cameras can have different backchannels; a camera with
-      // no entry in `live_mic_streams` (and no legacy fallback) returns ""
-      // and the pill should already be hidden — defensive check below.
-      const cameraId = this._getEffectiveLiveCamera();
-      const streamName = micStreamForCamera(cameraId, this.config);
-      if (!streamName) return;
-      const mode = this.config?.live_mic_mode ?? "toggle";
-      if (mode === "ptt") {
-        if (this._micState === "idle") void this._micClient.start(streamName);
-      } else {
-        void this._micClient.toggle(streamName);
-      }
+      this._micPress();
     };
     this._onMicPointerUp = (e) => {
       e.stopPropagation();
-      if (this.config?.live_mic_mode === "ptt" && this._micState !== "idle") {
-        this._micClient.stop();
-      }
+      this._micRelease();
     };
     // Gallery video mute state. Mirrors the live-view pattern: the
     // initial value comes from `config.auto_muted` (default true), but
@@ -3151,6 +3137,36 @@ class CameraGalleryCard extends LitElement {
 
   _renderLiveCardHost() {
     return html`<div id="live-card-host" class="live-card-host"></div>`;
+  }
+
+  // The talk button (the bar, or the live player's mic button) pressed / let go.
+  _micPress() {
+    // Resolve the mic stream for the camera that's currently in focus.
+    // Different cameras can have different backchannels; a camera with
+    // no entry in `live_mic_streams` (and no legacy fallback) returns ""
+    // and the pill should already be hidden — defensive check below.
+    const cameraId = this._getEffectiveLiveCamera();
+    const streamName = micStreamForCamera(cameraId, this.config);
+    if (!streamName) return;
+    const mode = this.config?.live_mic_mode ?? "toggle";
+    if (mode === "ptt") {
+      if (this._micState === "idle") void this._micClient.start(streamName);
+    } else {
+      void this._micClient.toggle(streamName);
+    }
+  }
+
+  _micRelease() {
+    if (this.config?.live_mic_mode === "ptt" && this._micState !== "idle") {
+      this._micClient.stop();
+    }
+  }
+
+  /** The live player's mic button: "" (no mic for this camera), or the mic's state ("error" while one shows). */
+  _liveTalkState() {
+    if (!micStreamForCamera(this._getEffectiveLiveCamera(), this.config)) return "";
+    if (this._micState !== "idle") return this._micState;
+    return this._micErrorCode && this._micErrorCode !== "aborted" ? "error" : "idle";
   }
 
   // ─── Talkback bar (two-way audio) ─────────────────────────────────────
@@ -6916,9 +6932,11 @@ class CameraGalleryCard extends LitElement {
                 .liveStreams=${shown ? ["sub", "main"] : []}
                 .stream=${shown || "sub"}
                 .liveMuted=${!!this._liveMuted}
+                .liveTalk=${this._liveTalkState()}
                 .reolinkEntity=${this.config?.reolink_app_entity}
                 @nvr-action=${(e) => this._onCameraAction(e.detail?.id)}
                 @nvr-mute=${() => { this._toggleLiveMute(); this.requestUpdate(); }}
+                @nvr-talk=${(e) => (e.detail?.down ? this._micPress() : this._micRelease())}
                 @nvr-stream=${(e) => this._setLiveQuality(e.detail?.stream)}
                 @nvr-fullscreen=${(e) => this._onNvrFullscreen(e)}
                 @nvr-swipe=${(e) => {
@@ -6931,7 +6949,7 @@ class CameraGalleryCard extends LitElement {
                   ${this._renderLiveInner()}
                   <div id="live-card-host" class="live-card-host${liveCropStyle ? ' has-crop' : ''}" style="${liveCropStyle}"></div>
                 </div>
-                <div slot="top" class="live-top-slot">${this._renderMicTalkbackBar({ top: true })}${this._renderMicErrorToast()}${this._renderLiveChevrons(true, true)}</div>
+                <div slot="top" class="live-top-slot">${this._renderMicErrorToast()}${this._renderLiveChevrons(true, true)}</div>
               </cgc-nvr-player>${this._renderSnapshotToast()}`;
             })() : this._hasLiveConfig() ? (() => {
               const liveCropStyle = this._getLiveCropStyle();

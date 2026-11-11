@@ -98,15 +98,85 @@ describe("<cgc-nvr-player live>", () => {
     expect(q(el, ".nvr-app")).not.toBeNull();
   });
 
-  it("reports an Android orientation restriction instead of pretending the phone rotated", async () => {
+  // Owner 11-10: "still the phone is not in [landscape] even after a full screen". The Home Assistant app can't turn
+  // the screen for a page (its WebView refuses the lock); the screen turns with the phone only with Auto-rotate on.
+  async function upright(portrait: () => boolean) {
     vi.stubGlobal("navigator", { userAgent: "Android" });
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(orientation: portrait)" && portrait(),
+    }));
     const el = await mount();
     const lock = vi.fn().mockRejectedValue(new Error("not supported in WebView"));
     vi.stubGlobal("screen", { orientation: { lock } });
+    el._fullscreen = true;
     await el._lockOrientation();
     await el.updateComplete;
+    return el;
+  }
+  const toast = (el: any) => q(el, ".nvr-toast")?.textContent ?? "";
+
+  it("explains Auto-rotate when an Android full screen stays upright", async () => {
+    const el = await upright(() => true);
     expect(el._locked).not.toBe(true);
-    expect(q(el, ".nvr-toast").textContent).toContain("Screen orientation to System");
+    expect(toast(el)).toBe(""); // the phone gets a moment to turn first
+    await vi.advanceTimersByTimeAsync(3000);
+    await el.updateComplete;
+    expect(toast(el)).toContain("switch on Auto-rotate");
+  });
+
+  it("no Auto-rotate hint once the screen turned with the phone", async () => {
+    let portrait = true;
+    const el = await upright(() => portrait);
+    portrait = false;
+    await vi.advanceTimersByTimeAsync(3000);
+    await el.updateComplete;
+    expect(toast(el)).toBe("");
+  });
+
+  // Owner 11-10: "I don't like the big tab to talk, can we just show a small mic beside the speaker button?"
+  it("a mic button beside the speaker when the host can talk; press and release ask the host", async () => {
+    const el = await mount({ liveTalk: "idle" });
+    const ctl = q(el, ".nvr-ctl-live");
+    expect([...ctl.querySelectorAll("button")].map((b: any) => b.className.trim())).toEqual([
+      "nvr-icon nvr-shot",
+      "nvr-icon nvr-talk idle",
+      "nvr-icon nvr-mute",
+      "nvr-icon nvr-fs",
+    ]);
+    expect(q(el, ".nvr-talk").getAttribute("aria-label")).toBe("Talk");
+    expect(q(el, ".nvr-talk ha-icon").getAttribute("icon")).toBe("mdi:microphone-outline");
+    const talks = events(el, "nvr-talk");
+    q(el, ".nvr-talk").dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+    q(el, ".nvr-talk").dispatchEvent(new Event("pointerup", { bubbles: true, composed: true }));
+    q(el, ".nvr-talk").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(talks).toEqual([{ down: true }, { down: false }, { down: true }]);
+  });
+
+  it("while talking the mic is red and the controls stay; after, they hide as usual", async () => {
+    const el = await mount({ liveTalk: "idle" });
+    el.liveTalk = "connecting";
+    await el.updateComplete;
+    expect(q(el, ".nvr-talk").classList.contains("connecting")).toBe(true);
+    el.liveTalk = "active";
+    await el.updateComplete;
+    expect(q(el, ".nvr-talk").classList.contains("active")).toBe(true);
+    expect(q(el, ".nvr-talk").getAttribute("aria-pressed")).toBe("true");
+    expect(q(el, ".nvr-talk").getAttribute("aria-label")).toBe("Stop talking");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(el._ui).toBe(true);
+    el._onTap(); // a tap on the picture doesn't hide the mic while talking
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(el._ui).toBe(true);
+    el.liveTalk = "error";
+    await el.updateComplete;
+    expect(q(el, ".nvr-talk ha-icon").getAttribute("icon")).toBe("mdi:microphone-off");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(el._ui).toBe(false);
+  });
+
+  it("no mic button without talk", async () => {
+    const el = await mount({ liveTalk: "" });
+    expect(q(el, ".nvr-talk")).toBeNull();
   });
 
   it("opens a recording at the displayed playback clock after seeking", async () => {
