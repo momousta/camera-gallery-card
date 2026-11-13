@@ -106,42 +106,65 @@ describe("tiles follow the shared moment", () => {
     expect(rule).toMatch(/width:\s*100%\s*;/);
   });
 
-  it("a camera showing an event glows in that event's track colour, for five minutes", async () => {
+  // Owner 11-13: "just remove this white glow" (owner.25's event glow). The track's marks keep the event colours.
+  it("no camera glows, whatever its picture; the track's marks keep the event colours", async () => {
     const card = await render();
-    const glows = () =>
-      $$(card, ".tl-tile").map((t) =>
-        [...t.classList].filter((c) => c === "glow" || c.startsWith("k-")).join(" ")
-      );
-    const atT = async (t: number) => {
+    for (const t of [at(12, 47), at(9, 0), at(13, 12), at(13, 34)]) {
       card._setT(t);
       await card.updateComplete;
-      return glows();
-    };
-    // Front, Back, Doorbell. Front: a car at 12:45; Back: a person at 09:00, hours before.
-    expect(await atT(at(12, 47))).toEqual(["glow k-car", "", ""]);
-    expect(await atT(at(9, 0))).toEqual(["", "glow k-person", ""]);
-    // The doorbell's visitor at 13:10; the car is 27 minutes old by then.
-    expect(await atT(at(13, 12))).toEqual(["", "", "glow k-visitor"]);
-    // Front's motion at 13:30: still glowing at 4 minutes, not at 6.
-    expect(await atT(at(13, 34))).toEqual(["glow k-motion", "", ""]);
-    expect(await atT(at(13, 36))).toEqual(["", "", ""]);
-    // Routine stills never glow (the doorbell's 13:55 snapshot).
-    expect(await atT(at(13, 56))).toEqual(["", "", ""]);
-  });
-
-  it("the glow and the track's marks share one set of event colours", () => {
+      for (const tile of $$(card, ".tl-tile"))
+        expect([...tile.classList].filter((c) => c === "glow" || c.startsWith("k-"))).toEqual([]);
+    }
     const text = timelineStyles.cssText;
-    for (const kind of ["person", "car", "dog", "visitor"]) {
-      expect(text).toMatch(new RegExp(`--tl-k-${kind}:\\s*#[0-9a-f]{6};`));
-      expect(text).toMatch(
-        new RegExp(`&\\.k-${kind}\\s*\\{\\s*--tl-glow:\\s*var\\(--tl-k-${kind}\\);`)
-      );
+    expect(text).not.toMatch(/glow|box-shadow:\s*0 0 0 2px/);
+    for (const kind of ["person", "car", "dog", "visitor"])
       expect(text).toMatch(
         new RegExp(`&\\.k-${kind}\\s*\\{\\s*background:\\s*var\\(--tl-k-${kind}\\);`)
       );
-    }
-    expect(text).toMatch(/--tl-glow:\s*var\(--tl-k-motion\);/);
     expect(text).toMatch(/background:\s*var\(--tl-k-motion\);/);
+  });
+
+  // Owner 11-13: a camera whose picture hasn't loaded showed the one before it ("very confusing"): a spinner now.
+  it("a tile shows a spinner, never the previous picture, until its own picture has loaded", async () => {
+    const card = await render();
+    card._setT(at(12, 50));
+    await card.updateComplete;
+    const front = () => $$(card, ".tl-tile")[0]!;
+    const img = () => front().querySelector("img.tl-img") as HTMLImageElement;
+    expect(img().classList.contains("loading")).toBe(true);
+    expect(front().querySelector(".tl-spin")).not.toBeNull();
+    img().dispatchEvent(new Event("load"));
+    await card.updateComplete;
+    expect(img().classList.contains("loading")).toBe(false);
+    expect(front().querySelector(".tl-spin")).toBeNull();
+    // On to Front's motion at 13:30: the car picture is not kept underneath while the new one loads.
+    card._setT(at(13, 34));
+    await card.updateComplete;
+    expect(img().getAttribute("src")).toBe(P("front", "motion_20261019_133000.gif"));
+    expect(img().classList.contains("loading")).toBe(true);
+    expect(img().getAttribute("style") ?? "").not.toContain("background-image");
+    expect(front().querySelector(".tl-spin")).not.toBeNull();
+    // Back to the car, loaded before in this tile? No: the tile keeps only the picture it shows.
+    img().dispatchEvent(new Event("load"));
+    await card.updateComplete;
+    expect(front().querySelector(".tl-spin")).toBeNull();
+    const rule = timelineStyles.cssText.match(/\.tl-tile \.tl-img\.loading\s*\{([^}]+)\}/)?.[1];
+    expect(rule).toMatch(/opacity:\s*0\s*;/);
+  });
+
+  it("a picture that can't load at all says so instead of spinning", async () => {
+    const card = await render();
+    card._setT(at(12, 50));
+    await card.updateComplete;
+    const front = () => $$(card, ".tl-tile")[0]!;
+    front().querySelector("img")!.dispatchEvent(new Event("error")); // the preview
+    await card.updateComplete;
+    expect(tileSrcs(card)[0]).toBe(L("front", "car_20261019_124500_snapshot.jpg"));
+    front().querySelector("img")!.dispatchEvent(new Event("error")); // the file itself
+    await card.updateComplete;
+    expect(front().querySelector("img")).toBeNull();
+    expect(front().querySelector(".tl-spin")).toBeNull();
+    expect(front().textContent).toContain("Picture missing");
   });
 
   it("opens on today at now, each camera on its latest frame", async () => {

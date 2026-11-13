@@ -6,7 +6,7 @@ export const timelineStyles = css`
     position: relative;
     --tl-gap: 8px;
     --tl-lane-h: 7px;
-    /* Event colours: the track's marks and the glow of a camera showing that event. */
+    /* Event colours of the track's marks. */
     --tl-k-person: #ff9800;
     --tl-k-car: #42a5f5;
     --tl-k-dog: #66bb6a;
@@ -152,22 +152,35 @@ export const timelineStyles = css`
   .tl-tile.stale .tl-img {
     opacity: 0.45;
   }
-  .tl-tile.glow {
-    --tl-glow: var(--tl-k-motion);
-    box-shadow:
-      0 0 0 2px var(--tl-glow),
-      0 0 12px 2px var(--tl-glow);
-    &.k-person {
-      --tl-glow: var(--tl-k-person);
+  /* A picture still loading: hidden after a quarter second (a cached one shows at once), with a spinner. */
+  .tl-tile .tl-img.loading {
+    opacity: 0;
+    transition: opacity 0s 0.25s;
+  }
+  .tl-spin {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 28px;
+    height: 28px;
+    margin: -17px 0 0 -17px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+    animation:
+      tl-spin 0.9s linear infinite,
+      tl-spin-in 0.2s ease 0.25s forwards;
+  }
+  @keyframes tl-spin {
+    to {
+      transform: rotate(360deg);
     }
-    &.k-car {
-      --tl-glow: var(--tl-k-car);
-    }
-    &.k-dog {
-      --tl-glow: var(--tl-k-dog);
-    }
-    &.k-visitor {
-      --tl-glow: var(--tl-k-visitor);
+  }
+  @keyframes tl-spin-in {
+    to {
+      opacity: 1;
     }
   }
   .tl-empty {

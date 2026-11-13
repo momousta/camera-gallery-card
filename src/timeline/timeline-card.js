@@ -64,8 +64,6 @@ export const TIMELINE_SPEEDS = [60, 300, 900];
 const SPEED_LABELS = ["1 min/s", "5 min/s", "15 min/s"];
 /** A frame older than this at the moment shown is dimmed. */
 const STALE_MS = 30 * 60_000;
-/** A camera whose frame shown is an event this recent glows in the event's track colour. */
-const GLOW_MS = 5 * 60_000;
 /** Re-plan the preloading when the moment moves this far from the last plan. */
 const REPLAN_MS = 45 * 60_000;
 const PRELOAD_CONCURRENCY = 4;
@@ -144,7 +142,8 @@ export class CameraTimelineCard extends LitElement {
     this._scrollRaf = 0;
     this._playRaf = 0;
     this._failed = new Set();
-    this._lastFrame = new Map();
+    this._lastFrame = new Map(); // tile -> the picture it has loaded (a tile shows no other picture)
+    this._broken = new Set(); // pictures that didn't load: "Picture missing", not a spinner
     this._preloader = null;
     this._planKey = "";
     this._planT = null;
@@ -611,6 +610,23 @@ export class CameraTimelineCard extends LitElement {
     this.requestUpdate();
   }
 
+  _onTileLoad(ci, url) {
+    if (!url || this._lastFrame.get(ci) === url) return;
+    this._lastFrame.set(ci, url);
+    this.requestUpdate();
+  }
+
+  /** A tile's picture failed: its preview falls back to the file itself; the file itself is missing. */
+  _onTileError(src, url) {
+    if (url !== src) {
+      this._onPreviewError(src);
+      return;
+    }
+    if (this._broken.has(url)) return;
+    this._broken.add(url);
+    this.requestUpdate();
+  }
+
   // ── opening a camera ────────────────────────────────────────────────
 
   /** A tap on a camera: its page, on the frame shown (`cgc_src`, when its gallery has a `url_id`) at the moment on
@@ -808,30 +824,33 @@ export class CameraTimelineCard extends LitElement {
     const url = this._tileUrl(item);
     const age = t - item.ms;
     const stale = age > STALE_MS;
-    const glow = MARK_KINDS.has(item.kind) && age <= GLOW_MS ? `glow k-${item.kind}` : "";
-    const under = this._lastFrame.get(ci);
+    // Until its own picture has loaded, a tile shows a spinner, never the previous camera picture (owner 11-13).
+    const ready = !!url && this._lastFrame.get(ci) === url;
     const locale = this._hass?.locale;
     const icon = KIND_ICON[item.kind];
     return html`<div class="tl-camera"><button
-      class="tl-tile ${stale ? "stale" : ""} ${glow}"
+      class="tl-tile ${stale ? "stale" : ""}"
       title=${cam.navigation_path ? `Open ${name}` : name}
       @click=${() => {
         this._pause();
         this._openCamera(cam, item, t);
       }}
     >
-      ${url
-        ? html`<img
-            class="tl-img"
-            src=${url}
-            alt=""
-            decoding="async"
-            fetchpriority="high"
-            style=${under && under !== url ? `background-image:url("${under}")` : ""}
-            @load=${() => this._lastFrame.set(ci, url)}
-            @error=${() => this._onPreviewError(item.src)}
-          />`
-        : html`<div class="tl-empty"><ha-icon icon="mdi:filmstrip"></ha-icon></div>`}
+      ${url && this._broken.has(url)
+        ? html`<div class="tl-empty">Picture missing</div>`
+        : url
+          ? html`<img
+                class="tl-img ${ready ? "" : "loading"}"
+                src=${url}
+                alt=""
+                decoding="async"
+                fetchpriority="high"
+                @load=${(e) => this._onTileLoad(ci, e.target.getAttribute("src"))}
+                @error=${() => this._onTileError(item.src, url)}
+              />${ready
+                ? ""
+                : html`<div class="tl-spin" role="progressbar" aria-label="Loading the picture"></div>`}`
+          : html`<div class="tl-empty"><ha-icon icon="mdi:filmstrip"></ha-icon></div>`}
       <div class="tl-label top">${name}</div>
       <div class="tl-label bottom">
         <span
