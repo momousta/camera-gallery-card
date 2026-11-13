@@ -249,9 +249,10 @@ only that camera's track is updated and existing items retain their parsed times
 high fetch priority. This avoids repeatedly parsing thousands of files, but does not eliminate network/image
 loading time or establish a speed comparison with Ring.
 
-**Event glow on the Timeline:** a camera whose picture on screen is an event from the last five minutes glows in
-that event's track colour: person orange, car blue, dog green, doorbell visitor purple, motion grey. Routine
-stills (`snapshot_…`, `hourly_…`) never glow. The marks and the glow share the `--tl-k-<kind>` colours.
+**Timeline tiles while loading (owner.30):** a camera whose own picture hasn't loaded shows a spinner (after a
+quarter second, so a cached picture shows at once), never the picture it showed before; a picture that can't load
+at all says "Picture missing". The owner.25 event glow is gone (the owner found it confusing); the track's marks
+keep the event colours (`--tl-k-<kind>`).
 
 **The timeline card's track** (owner fork): pinch it to zoom, from the whole day on the screen down to a pixel a
 second for slow scrubbing. Ctrl + wheel (or a trackpad pinch) and the − / + buttons zoom too. The moment stays
