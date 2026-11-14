@@ -254,6 +254,19 @@ quarter second, so a cached picture shows at once), never the picture it showed 
 at all says "Picture missing". The owner.25 event glow is gone (the owner found it confusing); the track's marks
 keep the event colours (`--tl-k-<kind>`).
 
+**Moving between days (owner.31):** the Timeline remembers which way the viewer is moving (a drag, play, the day
+arrows) and preloads in that order: the previews around the moment, the side it is heading first; the pictures a day
+change lands on (the end of the day before, the start and end of the day after); and 8 hours into each neighbour
+day from there, interleaved by distance. It re-plans during a drag, 6 previews at a time. While the moment moves,
+a tile shows only a picture already loaded and asks for nothing (a drag used to ask for every picture it passed and
+drop most half-way, which closes the phone's connections); when the moment rests, each tile asks for its own. The
+track's marks are one SVG path per camera and kind (about 40 elements a day instead of ~1,500), stretched by the
+zoom, so a day change draws ~3x less. Camera pages preload the strip ends a day change lands on right after the
+previews around the selection, the way the viewer last went first. Measured in the real dashboard (phone viewport,
+4x CPU), dragging back through the day before, moments with all 8 cameras on their own picture: home Wi-Fi 98-100%
+(was 98-100%), slow Wi-Fi (40 ms, 15 Mbit/s) 72-80% (was 26-40%), remote (100 ms, 10 Mbit/s) 92-98% (was ~12%);
+landing on the new day 0.05-0.2 s (was 0.33-0.8 s).
+
 **The timeline card's track** (owner fork): pinch it to zoom, from the whole day on the screen down to a pixel a
 second for slow scrubbing. Ctrl + wheel (or a trackpad pinch) and the − / + buttons zoom too. The moment stays
 under the playhead, the labels follow the zoom (every 6 h … every 5 min), and the phone remembers the zoom.
