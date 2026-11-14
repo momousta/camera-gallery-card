@@ -16,6 +16,7 @@ import {
   itemsBetween,
   msToPx,
   preloadOrder,
+  preloadPlanOrder,
   pxToMs,
   type TimelineItem,
 } from "./timeline-data";
@@ -111,6 +112,58 @@ describe("lookup", () => {
     expect(itemsBetween(items, at(10, 30), at(11)).map((x) => x.src)).toEqual(["s1"]);
     expect(itemsBetween(items, at(0), at(0, 0, 0, 20))).toHaveLength(4);
     expect(itemsBetween(items, at(12), at(13))).toEqual([]);
+  });
+
+  // Owner 11-13: moving to a day, and dragging on into it, was slow.
+  it("loads the way the viewer is moving first; the way back counts as twice as far", () => {
+    const item = (src: string, h: number, m = 0): TimelineItem => ({
+      src,
+      ms: at(h, m),
+      kind: "still",
+    });
+    const cam = [item("-20", 9, 40), item("-10", 9, 50), item("+15", 10, 15), item("+30", 10, 30)];
+    const order = (dir: 1 | -1) => preloadPlanOrder([cam], at(10), dir).map((x) => x.src);
+    expect(order(1)).toEqual(["+15", "-10", "+30", "-20"]); // -10 counts as 20, -20 as 40
+    expect(order(-1)).toEqual(["-10", "-20", "+15", "+30"]); // +15 counts as 30, +30 as 60
+  });
+
+  it("the neighbour days load from where a day change lands, interleaved by distance", () => {
+    const item = (src: string, ms: number): TimelineItem => ({ src, ms, kind: "still" });
+    const today = [item("t-30", at(9, 30)), item("t-90", at(8, 30))];
+    const end = at(23, 59, 59, 18);
+    const yesterday = [
+      item("y-15h", end - 15 * 3600_000), // beyond the span: not loaded
+      item("y-60", end - 60 * 60_000),
+      item("y-5", end - 5 * 60_000), // what the camera shows on landing
+    ];
+    const plan = preloadPlanOrder([today], at(10), -1, [
+      {
+        dayItems: [yesterday],
+        landing: end,
+        inward: -1,
+        spanMs: 8 * 3600_000,
+        offsetMs: 15 * 60_000,
+      },
+    ]).map((x) => x.src);
+    // t-30 (30 min), y-5 (15 + 5), y-60 (15 + 60), t-90 (90).
+    expect(plan).toEqual(["y-5", "t-30", "y-60", "t-90"]);
+    // The day after, from its start: the frame shown at the landing (before it) and on, within the span.
+    const start = at(0, 0, 0, 20);
+    const tomorrow = [
+      item("n-shown", start + 10_000),
+      item("n+2h", start + 2 * 3600_000),
+      item("n+9h", start + 9 * 3600_000),
+    ];
+    const next = preloadPlanOrder([[]], at(10), 1, [
+      {
+        dayItems: [tomorrow],
+        landing: start + 60_000,
+        inward: 1,
+        spanMs: 8 * 3600_000,
+        offsetMs: 0,
+      },
+    ]).map((x) => x.src);
+    expect(next).toEqual(["n-shown", "n+2h"]);
   });
 
   it("orders preloads by distance from the moment, across cameras", () => {

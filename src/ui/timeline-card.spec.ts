@@ -119,9 +119,9 @@ describe("tiles follow the shared moment", () => {
     expect(text).not.toMatch(/glow|box-shadow:\s*0 0 0 2px/);
     for (const kind of ["person", "car", "dog", "visitor"])
       expect(text).toMatch(
-        new RegExp(`&\\.k-${kind}\\s*\\{\\s*background:\\s*var\\(--tl-k-${kind}\\);`)
+        new RegExp(`&\\.k-${kind}\\s*\\{\\s*stroke:\\s*var\\(--tl-k-${kind}\\);`)
       );
-    expect(text).toMatch(/background:\s*var\(--tl-k-motion\);/);
+    expect(text).toMatch(/stroke:\s*var\(--tl-k-motion\);/);
   });
 
   // Owner 11-13: a camera whose picture hasn't loaded showed the one before it ("very confusing"): a spinner now.
@@ -137,7 +137,8 @@ describe("tiles follow the shared moment", () => {
     await card.updateComplete;
     expect(img().classList.contains("loading")).toBe(false);
     expect(front().querySelector(".tl-spin")).toBeNull();
-    // On to Front's motion at 13:30: the car picture is not kept underneath while the new one loads.
+    // On to Front's motion at 13:30 (one jump, not a drag): the car picture is not kept underneath while it loads.
+    await settle(card, 200);
     card._setT(at(13, 34));
     await card.updateComplete;
     expect(img().getAttribute("src")).toBe(P("front", "motion_20261019_133000.gif"));
@@ -150,6 +151,55 @@ describe("tiles follow the shared moment", () => {
     expect(front().querySelector(".tl-spin")).toBeNull();
     const rule = timelineStyles.cssText.match(/\.tl-tile \.tl-img\.loading\s*\{([^}]+)\}/)?.[1];
     expect(rule).toMatch(/opacity:\s*0\s*;/);
+  });
+
+  // Owner 11-13: a drag asked for every picture it passed and dropped most half-way (slow on a phone's link).
+  it("while the moment moves, a tile asks for no picture that isn't here yet; at rest it does", async () => {
+    const card = await render();
+    card._setT(at(12, 50));
+    await settle(card, 200);
+    const front = () => $$(card, ".tl-tile")[0]!;
+    // Front's car picture loads; then a drag moves on to its 13:30 motion, not loaded yet.
+    front().querySelector("img")!.dispatchEvent(new Event("load"));
+    await card.updateComplete;
+    card._setT(at(13, 0));
+    card._setT(at(13, 34));
+    await card.updateComplete;
+    expect(card._moving).toBe(true);
+    expect(front().querySelector("img")).toBeNull();
+    expect(front().querySelector(".tl-spin")).not.toBeNull();
+    // Back to the car while still moving: it is here, so it shows at once.
+    card._setT(at(12, 50));
+    await card.updateComplete;
+    expect(front().querySelector("img")?.getAttribute("src")).toBe(
+      P("front", "car_20261019_124500_snapshot.jpg")
+    );
+    // A preloaded picture shows while moving too.
+    card._preloader ??= new ThumbPreloader();
+    card._preloader.markLoaded(P("front", "motion_20261019_133000.gif"));
+    card._setT(at(13, 34));
+    await card.updateComplete;
+    expect(front().querySelector("img")?.getAttribute("src")).toBe(
+      P("front", "motion_20261019_133000.gif")
+    );
+    // The back camera's 09:00 person picture isn't here: it waits until the moment rests.
+    // (Without preloading the tiles never wait: see _preloadOn.)
+    const back = () => $$(card, ".tl-tile")[1]!;
+    expect(back().querySelector("img")).toBeNull();
+    await settle(card, 200);
+    expect(card._moving).toBe(false);
+    expect(back().querySelector("img")?.getAttribute("src")).toBe(
+      P("back", "person_20261019_090000.gif")
+    );
+  });
+
+  it("without preloading, a tile asks for its picture even while the moment moves", async () => {
+    const card = await render({ preload: false });
+    card._setT(at(13, 0));
+    card._setT(at(13, 34));
+    await card.updateComplete;
+    expect(card._moving).toBe(true);
+    expect(tileSrcs(card)[0]).toBe(P("front", "motion_20261019_133000.gif"));
   });
 
   it("a picture that can't load at all says so instead of spinning", async () => {
@@ -246,12 +296,13 @@ describe("the time track", () => {
     expect(card._playing).toBe(true);
     await settle(card, 1000); // 1 s at 1 min/s: past the 12:45 car snapshot
     expect(card._t).toBeGreaterThanOrEqual(start + 50_000);
-    expect(tileSrcs(card)[0]).toBe(P("front", "car_20261019_124500_snapshot.jpg"));
     $(card, ".tl-scroll").dispatchEvent(new Event("touchstart"));
     expect(card._playing).toBe(false);
     const frozen = card._t;
     await settle(card, 500);
     expect(card._t).toBe(frozen);
+    // While playing, a picture not loaded yet waits for the preloading; at rest the tile asks for it.
+    expect(tileSrcs(card)[0]).toBe(P("front", "car_20261019_124500_snapshot.jpg"));
   });
 
   it("zoom keeps the moment and changes the scale", async () => {
@@ -338,9 +389,31 @@ describe("zoom on the track itself (owner 10-23)", () => {
   it("the track's marks sit at the zoom without being drawn again", async () => {
     const card = await wide();
     const mark = $(card, ".tl-mark") as HTMLElement;
-    expect(mark.getAttribute("style")).toContain("var(--tl-ppm)");
+    const lane = mark.closest(".tl-lane")!;
+    expect(lane.getAttribute("viewBox")).toBe("0 0 1440 1");
+    const rule = timelineStyles.cssText.match(/\.tl-lane\s*\{([^}]+)\}/)?.[1];
+    expect(rule).toMatch(/width:\s*calc\(1440 \* var\(--tl-ppm\) \* 1px\)/);
     card._zoomTo(5, { commit: false });
     expect($(card, ".tl-mark")).toBe(mark); // the same element
+  });
+
+  // Owner 11-13: a day change was slow; ~1,500 mark elements a day took ~0.2 s to draw on a phone.
+  it("a camera's marks are one path per kind of event, at the events' minutes", async () => {
+    const card = await wide();
+    const lanes = $$(card, ".tl-lane");
+    expect(lanes).toHaveLength(3);
+    const front = [...lanes[0]!.querySelectorAll("path.tl-mark")].map((p) => [
+      p.getAttribute("class"),
+      p.getAttribute("d"),
+    ]);
+    // Front on 10-19: a car at 12:45 and motion at 13:30 (the hourly clip and stills aren't marked).
+    expect(front).toEqual([
+      ["tl-mark k-car", "M765.0000 0.21V0.79"],
+      ["tl-mark k-motion", "M810.0000 0.21V0.79"],
+    ]);
+    expect($$(card, ".tl-mark").every((p) => p.namespaceURI === "http://www.w3.org/2000/svg")).toBe(
+      true
+    );
   });
 });
 
@@ -369,6 +442,7 @@ describe("scrolling past either end of the day (owner 10-23)", () => {
     await scrolled(card, [400, 0]);
     expect(card._day).toBe("2026-10-18");
     expect(card._t).toBe(new Date(2026, 9, 19).getTime() - 1000 - 60_000); // 23:58:59
+    await settle(card, 200); // the drag rests
     expect(tileSrcs(card)[0]).toBe(P("front", "motion_20261018_220000.gif"));
   });
 
@@ -561,8 +635,60 @@ describe("preloading and updates", () => {
       P("door", "visitor_20261019_131000.mp4"),
       P("front", "car_20261019_124500_snapshot.jpg"),
       P("front", "hourly_20261019_120000.gif"),
+      // The day before (owner 11-13): from where the previous-day arrow lands, 2 h + 15 min away.
+      P("front", "motion_20261018_220000.gif"),
       P("back", "person_20261019_090000.gif"),
     ]);
+  });
+
+  it("knows which way the viewer is moving: a day change and a drag set it, a finger's jitter doesn't", async () => {
+    const card = await render();
+    expect(card._dir).toBe(-1);
+    card._setT(at(12, 0));
+    card._setT(at(12, 30));
+    expect(card._dir).toBe(1);
+    card._setT(at(12, 29, 30));
+    expect(card._dir).toBe(1); // 30 s back: jitter
+    card._flipDay(-1);
+    expect(card._dir).toBe(-1);
+    expect(card._day).toBe("2026-10-18");
+    card._stepDay(1);
+    expect(card._dir).toBe(1);
+  });
+
+  it("plans the preloading again when it comes back to the page", async () => {
+    const calls: number[] = [];
+    vi.spyOn(ThumbPreloader.prototype, "setQueue").mockImplementation(function (entries) {
+      calls.push(entries.length);
+    });
+    const card = await render();
+    await vi.advanceTimersByTimeAsync(1000);
+    const before = calls.length;
+    card._setT(at(9, 0)); // a plan is coming...
+    card.remove(); // ...when the page is left
+    document.body.append(card);
+    await card.updateComplete;
+    card._setT(at(12, 0)); // a drag after coming back
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(calls.length).toBeGreaterThan(before + 1);
+    expect(calls[calls.length - 1]).toBeGreaterThan(0);
+  });
+
+  it("re-plans while a drag goes on, not only once it stops", async () => {
+    const plans: number[] = [];
+    const card = await render();
+    await vi.advanceTimersByTimeAsync(1000);
+    vi.spyOn(card, "_planPreload").mockImplementation(() => {
+      plans.push(card._t);
+      card._planTimer = 0;
+      card._planT = card._t;
+    });
+    // A drag back: a moment every 50 ms, two hours in all over two seconds.
+    for (let k = 1; k <= 40; k++) {
+      card._setT(at(13, 0) - k * 3 * 60_000);
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    expect(plans.length).toBeGreaterThanOrEqual(2);
   });
 
   it("new clips appear without losing the moment the user picked", async () => {

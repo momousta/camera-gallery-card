@@ -19,6 +19,14 @@ export interface PreloadPlanInput {
   neighbourDays: number;
   /** The strip of a day, in strip order (already filtered and capped like the card shows it). */
   itemsForDay: (day: string) => readonly string[];
+  /**
+   * Owner 11-13: moving to a day should be quick. This many items around the selection first, then this many at
+   * each end of the neighbour days' strips where a day change lands (the day before: the start of its strip, as
+   * its button and a drag past the strip's end land; the day after: both ends), then the rest. 0 (default): off.
+   */
+  landing?: number;
+  /** Which way the viewer last changed day: true (default) to older days, false to newer; that side goes first. */
+  towardOlder?: boolean;
 }
 
 /** The order to preload in: the active day outward from the selection, then the neighbour days. */
@@ -37,20 +45,37 @@ export function planPreload(input: PreloadPlanInput): string[] {
 
   const active = itemsForDay(activeDay);
   const sel = Math.min(Math.max(0, Math.trunc(selectedIndex) || 0), Math.max(0, active.length - 1));
+  const at = days.indexOf(activeDay);
+  const n = Math.max(0, Math.trunc(input.neighbourDays) || 0);
+  const landing = Math.max(0, Math.trunc(input.landing ?? 0) || 0);
+  const olderFirst = input.towardOlder !== false;
+  const sides = (k: number): string[] => {
+    const older = at >= 0 ? days[at + k] : undefined;
+    const newer = at >= 0 && at - k >= 0 ? days[at - k] : undefined;
+    return (olderFirst ? [older, newer] : [newer, older]).filter((d): d is string => !!d);
+  };
+
   push(active[sel]);
-  for (let d = 1; d < active.length; d++) {
+  let d = 1;
+  if (landing && n) {
+    for (; d <= landing; d++) {
+      push(active[sel + d]);
+      push(active[sel - d]);
+    }
+    for (const day of sides(1)) {
+      const strip = itemsForDay(day);
+      strip.slice(0, landing).forEach(push);
+      if (day === days[at - 1]) strip.slice(-landing).reverse().forEach(push);
+    }
+  }
+  for (; d < active.length; d++) {
     push(active[sel + d]);
     push(active[sel - d]);
   }
 
-  const at = days.indexOf(activeDay);
-  const n = Math.max(0, Math.trunc(input.neighbourDays) || 0);
   if (at >= 0) {
     for (let k = 1; k <= n; k++) {
-      const older = days[at + k];
-      const newer = at - k >= 0 ? days[at - k] : undefined;
-      if (older) for (const src of itemsForDay(older)) push(src);
-      if (newer) for (const src of itemsForDay(newer)) push(src);
+      for (const day of sides(k)) for (const src of itemsForDay(day)) push(src);
     }
   }
   return out;
@@ -116,6 +141,11 @@ export class ThumbPreloader {
       return !this._done.has(e.url) && !this._failed.has(e.url) && !this._inFlight.has(e.url);
     });
     this.pump();
+  }
+
+  /** Whether a URL has loaded (here, or marked so). */
+  has(url: string): boolean {
+    return this._done.has(url);
   }
 
   /** Mark URLs as already loaded (e.g. by a visible tile) so they aren't fetched again. */

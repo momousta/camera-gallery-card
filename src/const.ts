@@ -375,6 +375,8 @@ export const PRELOAD_DAYS_MAX = 7;
 /** Parallel preview preloads. HA serves HTTP/1.1 (about 6 connections per host), so this leaves room for the
  * visible tiles, the viewer and the websocket. */
 export const PRELOAD_CONCURRENCY = 3;
+/** Preload this many previews around the selection, then this many at each landing end of the neighbour days. */
+export const PRELOAD_LANDING = 8;
 export const DEFAULT_VISIBLE_OBJECT_FILTERS: readonly ObjectFilter[] = [];
 
 // -------- Inline-style fallbacks (used by render(), not styles.ts) --------

@@ -26,7 +26,7 @@
  *                                                       # exact file (cgc_src) and moment (cgc_time)
  */
 
-import { LitElement, html } from "lit";
+import { LitElement, html, svg } from "lit";
 import { guard } from "lit/directives/guard.js";
 
 import { monthOf } from "../data/calendar";
@@ -50,7 +50,7 @@ import {
   markStepMin,
   MAX_PPM,
   msToPx,
-  preloadOrder,
+  preloadPlanOrder,
   pxToMs,
   ZOOM_STEP,
 } from "./timeline-data";
@@ -66,7 +66,16 @@ const SPEED_LABELS = ["1 min/s", "5 min/s", "15 min/s"];
 const STALE_MS = 30 * 60_000;
 /** Re-plan the preloading when the moment moves this far from the last plan. */
 const REPLAN_MS = 45 * 60_000;
-const PRELOAD_CONCURRENCY = 4;
+// The browser fetches at most 6 at a time from one server; the tiles' own pictures still go first (high priority).
+const PRELOAD_CONCURRENCY = 6;
+/** The neighbour days' previews (owner 11-13): this far into each from where a day change lands, */
+const NEIGHBOUR_SPAN_MS = 8 * 3600_000;
+/** loading right after the previews this near the moment (the way the viewer is heading; 4x later the other way). */
+const LANDING_OFFSET_MS = 15 * 60_000;
+/** A moment change this big tells which way the viewer is moving (a finger's jitter doesn't). */
+const DIR_MIN_MS = 60_000;
+/** The moment is moving (a drag, a fling, play) until it rests this long. */
+const MOVE_REST_MS = 150;
 const VIDEO_RE = /\.(mp4|webm|mov|m4v)$/i;
 
 const KIND_ICON = {
@@ -121,6 +130,7 @@ export class CameraTimelineCard extends LitElement {
     this._days = [];
     this._day = "";
     this._t = null;
+    this._dir = -1; // which way the viewer last moved: -1 back in time, +1 forward
     this._ppmV = loadPpm(); // the asked zoom; `_ppm()` is it within what the track allows
     this._pinch = null; // { d0, p0 } while two fingers pinch the track
     this._touching = false;
@@ -144,6 +154,10 @@ export class CameraTimelineCard extends LitElement {
     this._failed = new Set();
     this._lastFrame = new Map(); // tile -> the picture it has loaded (a tile shows no other picture)
     this._broken = new Set(); // pictures that didn't load: "Picture missing", not a spinner
+    this._seen = new Set(); // pictures the tiles have loaded
+    this._moving = false;
+    this._moveTimer = 0;
+    this._lastSetAt = 0;
     this._preloader = null;
     this._planKey = "";
     this._planT = null;
@@ -209,7 +223,11 @@ export class CameraTimelineCard extends LitElement {
     if (this._scrollRaf) cancelAnimationFrame(this._scrollRaf);
     this._scrollRaf = 0;
     clearTimeout(this._planTimer);
+    this._planTimer = 0; // a reconnect plans again (_schedulePreload waits for a pending one)
     clearTimeout(this._settleTimer);
+    clearTimeout(this._moveTimer);
+    this._moveTimer = 0;
+    this._moving = false;
     this._pinch = null;
     this._planKey = "";
     this._preloader?.setQueue([]);
@@ -298,9 +316,30 @@ export class CameraTimelineCard extends LitElement {
   _setT(t, { scroll = false } = {}) {
     const b = this._bounds();
     if (!b) return;
+    const before = this._t;
     this._t = Math.min(Math.max(t, b.start), b.last);
+    if (before !== null && Math.abs(this._t - before) >= DIR_MIN_MS) this._dir = this._t > before ? 1 : -1;
+    if (before !== null && this._t !== before) {
+      // Moving = moment changes in quick succession (a drag, a fling, play); one jump fetches at once.
+      const now = Date.now();
+      if (now - this._lastSetAt < MOVE_REST_MS) this._markMoving();
+      this._lastSetAt = now;
+    }
     if (scroll) this._needsScrollSync = true;
     this._schedulePreload(false);
+  }
+
+  /** While the moment moves, tiles ask for no picture of their own (owner 11-13: a drag asked for every picture it
+   * passed and dropped most of them half-way, which costs the phone its connections); the preloader, ahead of the
+   * drag, fetches. When the moment rests, each tile asks for its picture. */
+  _markMoving() {
+    this._moving = true;
+    clearTimeout(this._moveTimer);
+    this._moveTimer = setTimeout(() => {
+      this._moveTimer = 0;
+      this._moving = false;
+      this.requestUpdate();
+    }, MOVE_REST_MS);
   }
 
   /** The nearest day with clips before (-1) or after (+1) the shown day, or "". */
@@ -319,6 +358,7 @@ export class CameraTimelineCard extends LitElement {
     if (!next) return;
     this._userMoved = true;
     this._pause();
+    this._dir = delta < 0 ? -1 : 1;
     this._setDay(next);
   }
 
@@ -372,6 +412,7 @@ export class CameraTimelineCard extends LitElement {
     if (!nb) return false;
     this._userMoved = true;
     this._pause();
+    this._dir = side < 0 ? -1 : 1;
     this._setDay(next, side < 0 ? nb.end - 1000 - EDGE_LAND_MS : nb.start + EDGE_LAND_MS);
     return true;
   }
@@ -558,38 +599,76 @@ export class CameraTimelineCard extends LitElement {
         ${b.last < b.end - 1000
           ? html`<div class="tl-now-edge" style="left:${x(b.last)}" title="Now"></div>`
           : ""}
-        ${lanes.map(
-          (items, ci) =>
-            html`<div class="tl-lane" style="top:calc(30px + ${ci} * ${laneStep})">
-              ${items.map(
-                (it) => html`<i class="tl-mark k-${it.kind}" style="left:${x(it.ms, -1)}"></i>`
-              )}
-            </div>`
-        )}
+        ${lanes.map((items, ci) => {
+          // One path per kind of event, in minutes of the day stretched by the zoom (owner 11-13: an element per
+          // mark, ~1,500 a day, made every day change ~0.2 s slower).
+          const paths = new Map();
+          for (const it of items) paths.set(it.kind, (paths.get(it.kind) ?? "") + `M${min(it.ms)} 0.21V0.79`);
+          return html`<svg
+            class="tl-lane"
+            style="top:calc(30px + ${ci} * ${laneStep})"
+            viewBox="0 0 1440 1"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            ${[...paths].map(([kind, d]) => svg`<path class="tl-mark k-${kind}" d=${d}></path>`)}
+          </svg>`;
+        })}
       </div>
     `;
   }
 
   // ── preloading ───────────────────────────────────────────────────────
 
+  _preloadOn() {
+    return !!this.config?.preload && !!sidecarFolder(this.config?.thumbnail_folder);
+  }
+
   _schedulePreload(force) {
-    if (!this.config?.preload || !sidecarFolder(this.config?.thumbnail_folder)) return;
-    const key = `${this._day}|${this._rev}`;
+    if (!this._preloadOn()) return;
+    const key = `${this._day}|${this._rev}|${this._dir}`;
     const moved = this._planT === null || Math.abs((this._t ?? 0) - this._planT) > REPLAN_MS;
     if (!force && key === this._planKey && !moved) return;
-    clearTimeout(this._planTimer);
-    this._planTimer = setTimeout(() => this._planPreload(), this._planKey ? 300 : 900);
+    if (force) {
+      clearTimeout(this._planTimer);
+      this._planTimer = 0;
+    }
+    // A plan already coming reads the latest moment: a drag re-plans as it goes, not only once it stops.
+    if (this._planTimer) return;
+    this._planTimer = setTimeout(() => this._planPreload(), !this._planKey ? 900 : force ? 100 : 300);
+  }
+
+  /** The days next to the shown one, from where a day change lands: the day before from its end (the previous-day
+   * arrow and a drag past the track's start land there), the day after from its start (a drag past the end) and its
+   * end (the next-day arrow). */
+  _preloadNeighbours() {
+    const out = [];
+    const offset = (side) => (side === this._dir ? 1 : 4) * LANDING_OFFSET_MS;
+    const day = (d) => {
+      const b = d ? dayBounds(d) : null;
+      return b ? { b, dayItems: this._tracks.map((items) => itemsBetween(items, b.start, b.end)) } : null;
+    };
+    const prev = day(this._neighbourDay(-1));
+    if (prev) {
+      out.push({ dayItems: prev.dayItems, landing: prev.b.end - 1000, inward: -1, spanMs: NEIGHBOUR_SPAN_MS, offsetMs: offset(-1) });
+    }
+    const next = day(this._neighbourDay(1));
+    if (next) {
+      out.push({ dayItems: next.dayItems, landing: next.b.start + EDGE_LAND_MS, inward: 1, spanMs: NEIGHBOUR_SPAN_MS, offsetMs: offset(1) });
+      out.push({ dayItems: next.dayItems, landing: next.b.end - 1000, inward: -1, spanMs: 3600_000, offsetMs: offset(1) });
+    }
+    return out;
   }
 
   _planPreload() {
     this._planTimer = 0;
     const b = this._bounds();
     if (!b || !this.isConnected || this._t === null) return;
-    this._planKey = `${this._day}|${this._rev}`;
+    this._planKey = `${this._day}|${this._rev}|${this._dir}`;
     this._planT = this._t;
     const dayItems = this._tracks.map((items) => itemsBetween(items, b.start, b.end));
     const entries = [];
-    for (const it of preloadOrder(dayItems, this._t)) {
+    for (const it of preloadPlanOrder(dayItems, this._t, this._dir, this._preloadNeighbours())) {
       const url = this._previewFor(it.src);
       if (url) entries.push({ src: it.src, url });
     }
@@ -611,6 +690,7 @@ export class CameraTimelineCard extends LitElement {
   }
 
   _onTileLoad(ci, url) {
+    if (url) this._seen.add(url);
     if (!url || this._lastFrame.get(ci) === url) return;
     this._lastFrame.set(ci, url);
     this.requestUpdate();
@@ -826,6 +906,9 @@ export class CameraTimelineCard extends LitElement {
     const stale = age > STALE_MS;
     // Until its own picture has loaded, a tile shows a spinner, never the previous camera picture (owner 11-13).
     const ready = !!url && this._lastFrame.get(ci) === url;
+    // Moving: only a picture already here is shown; the others wait for the moment to rest (see _markMoving).
+    const hold =
+      !!url && !ready && this._moving && this._preloadOn() && !this._seen.has(url) && !this._preloader?.has(url);
     const locale = this._hass?.locale;
     const icon = KIND_ICON[item.kind];
     return html`<div class="tl-camera"><button
@@ -838,7 +921,9 @@ export class CameraTimelineCard extends LitElement {
     >
       ${url && this._broken.has(url)
         ? html`<div class="tl-empty">Picture missing</div>`
-        : url
+        : hold
+          ? html`<div class="tl-spin" role="progressbar" aria-label="Loading the picture"></div>`
+          : url
           ? html`<img
                 class="tl-img ${ready ? "" : "loading"}"
                 src=${url}

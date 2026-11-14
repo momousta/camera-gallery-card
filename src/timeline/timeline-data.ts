@@ -155,6 +155,66 @@ export function preloadOrder(
   return all.sort((a, b) => Math.abs(a.ms - t) - Math.abs(b.ms - t) || a.ms - b.ms);
 }
 
+/** A day next to the one shown, for preloading: where a day change lands in it and how the viewer goes on from there. */
+export interface PreloadNeighbour {
+  /** Each camera's items of that day, sorted by time. */
+  dayItems: readonly (readonly TimelineItem[])[];
+  /** Where a change to that day lands (epoch ms): the frame each camera shows there loads first. */
+  landing: number;
+  /** From the landing on into the day: -1 back in time (the day before), +1 forward (the day after). */
+  inward: 1 | -1;
+  /** Only this far into the day from the landing (ms). */
+  spanMs: number;
+  /** Counts as already this far from the moment (ms): how soon after the moment's own surroundings it loads. */
+  offsetMs: number;
+}
+
+/** Previews on the side the viewer is moving away from count as this many times farther. */
+export const PRELOAD_BEHIND_WEIGHT = 2;
+
+/**
+ * The order to preload in (owner 11-13: moving to a day, and dragging on into it, was slow): the shown day's
+ * previews nearest the moment first, the way the viewer is moving (`dir`: -1 back in time, +1 forward) counting as
+ * nearer than the way back; and, interleaved by the same distance, the neighbour days from where a day change lands
+ * on into them. Each camera's frame at a landing comes right after `offsetMs`.
+ */
+export function preloadPlanOrder(
+  dayItems: readonly (readonly TimelineItem[])[],
+  t: number,
+  dir: 1 | -1,
+  neighbours: readonly PreloadNeighbour[] = []
+): TimelineItem[] {
+  const scored: { it: TimelineItem; s: number }[] = [];
+  for (const items of dayItems) {
+    for (const it of items) {
+      const d = it.ms - t;
+      scored.push({
+        it,
+        s: Math.sign(d) === -dir ? Math.abs(d) * PRELOAD_BEHIND_WEIGHT : Math.abs(d),
+      });
+    }
+  }
+  for (const n of neighbours) {
+    for (const items of n.dayItems) {
+      const shown = itemAtOrBefore(items, n.landing);
+      items.forEach((it, i) => {
+        const x = (it.ms - n.landing) * n.inward;
+        if (i === shown || (x >= 0 && x <= n.spanMs))
+          scored.push({ it, s: n.offsetMs + Math.max(0, x) });
+      });
+    }
+  }
+  scored.sort((a, b) => a.s - b.s || a.it.ms - b.it.ms);
+  const seen = new Set<string>();
+  const out: TimelineItem[] = [];
+  for (const { it } of scored) {
+    if (seen.has(it.src)) continue;
+    seen.add(it.src);
+    out.push(it);
+  }
+  return out;
+}
+
 /** Zoom of the timeline track, in pixels per minute (a day is 1440 minutes): from the whole day fitting the track
  * (`fitPpm`) up to MAX_PPM (a pixel a second: scrubbing slowly). Pinch, Ctrl + wheel and the buttons change it. */
 export const MAX_PPM = 60;

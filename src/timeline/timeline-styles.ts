@@ -293,35 +293,37 @@ export const timelineStyles = css`
     width: 2px;
     background: rgba(244, 67, 54, 0.7);
   }
+  /* A camera's marks: the day's minutes (viewBox 0-1440) stretched to the zoom, so zooming moves them without
+     drawing them again; a mark stays 3 px wide (non-scaling stroke). */
   .tl-lane {
     position: absolute;
-    left: 0;
-    right: 0;
+    left: calc(var(--tl-half) * 1px);
+    width: calc(1440 * var(--tl-ppm) * 1px);
     height: var(--tl-lane-h);
+    overflow: visible;
   }
   .tl-mark {
-    position: absolute;
-    top: 0;
-    width: 3px;
-    height: 100%;
-    border-radius: 2px;
-    background: var(--tl-k-motion);
+    fill: none;
+    stroke: var(--tl-k-motion);
+    stroke-width: 3;
+    stroke-linecap: round; /* the caps (1.5 px) end the mark at the lane's edges: the path is 0.21-0.79 of 7 px */
+    vector-effect: non-scaling-stroke;
     opacity: 0.8;
 
     &.k-person {
-      background: var(--tl-k-person);
+      stroke: var(--tl-k-person);
       opacity: 1;
     }
     &.k-car {
-      background: var(--tl-k-car);
+      stroke: var(--tl-k-car);
       opacity: 1;
     }
     &.k-dog {
-      background: var(--tl-k-dog);
+      stroke: var(--tl-k-dog);
       opacity: 1;
     }
     &.k-visitor {
-      background: var(--tl-k-visitor);
+      stroke: var(--tl-k-visitor);
       opacity: 1;
     }
   }

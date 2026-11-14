@@ -71,6 +71,64 @@ describe("planPreload", () => {
     ).toEqual([]);
   });
 
+  // Owner 11-13: moving to a day should be quick: where a day change lands loads right after the selection's neighbours.
+  it("with `landing`, the strip ends a day change lands on come right after the selection's surroundings", () => {
+    const strip7 = (day: string) => strip(day, 7);
+    const plan = planPreload({
+      days: DAYS,
+      activeDay: DAYS[2]!,
+      selectedIndex: 3,
+      neighbourDays: 1,
+      itemsForDay: strip7,
+      landing: 2,
+    });
+    expect(plan.slice(0, 5)).toEqual([
+      "2026-10-17#3",
+      "2026-10-17#4",
+      "2026-10-17#2",
+      "2026-10-17#5",
+      "2026-10-17#1",
+    ]);
+    // The day before: the start of its strip (its button and a drag past the strip's end land there); the day
+    // after: both ends (its button lands on the start, a drag past the strip's start on the end).
+    expect(plan.slice(5, 11)).toEqual([
+      "2026-10-16#0",
+      "2026-10-16#1",
+      "2026-10-18#0",
+      "2026-10-18#1",
+      "2026-10-18#6",
+      "2026-10-18#5",
+    ]);
+    expect(plan.slice(11, 13)).toEqual(["2026-10-17#6", "2026-10-17#0"]);
+    expect(plan.slice(13, 18)).toEqual([
+      "2026-10-16#2",
+      "2026-10-16#3",
+      "2026-10-16#4",
+      "2026-10-16#5",
+      "2026-10-16#6",
+    ]);
+    expect(plan).toHaveLength(21);
+    // Heading to newer days: the day after goes first.
+    const newer = planPreload({
+      days: DAYS,
+      activeDay: DAYS[2]!,
+      selectedIndex: 3,
+      neighbourDays: 1,
+      itemsForDay: strip7,
+      landing: 2,
+      towardOlder: false,
+    });
+    expect(newer.slice(5, 11)).toEqual([
+      "2026-10-18#0",
+      "2026-10-18#1",
+      "2026-10-18#6",
+      "2026-10-18#5",
+      "2026-10-16#0",
+      "2026-10-16#1",
+    ]);
+    expect(newer[13]).toBe("2026-10-18#2");
+  });
+
   it("skips empty days and duplicate items", () => {
     const plan = planPreload({
       days: ["d1", "d2", "d3"],

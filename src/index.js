@@ -138,6 +138,7 @@ import {
   DEFAULT_PRELOAD_DAYS,
   DEFAULT_PREVIEW_CLOSE_ON_TAP_WHEN_GATED,
   PRELOAD_CONCURRENCY,
+  PRELOAD_LANDING,
   PTZ_SPEED_MAX,
   DEFAULT_PREVIEW_POSITION,
   DEFAULT_SOURCE_MODE,
@@ -5137,6 +5138,7 @@ class CameraGalleryCard extends LitElement {
     const next = stepDay(activeDay ?? null, delta, days ?? []);
     if (next === null) return;
 
+    this._preloadTowardOlder = delta > 0; // the previews of the days that way load first
     this._selectedDay = next;
     this._selectedIndex = 0;
     this._pendingScrollToI = null;
@@ -5830,6 +5832,8 @@ class CameraGalleryCard extends LitElement {
       selectedIndex: this._selectedIndex ?? 0,
       neighbourDays: this.config?.preload_days ?? DEFAULT_PRELOAD_DAYS,
       itemsForDay,
+      landing: PRELOAD_LANDING,
+      towardOlder: this._preloadTowardOlder !== false,
     });
     const entries = [];
     for (const src of plan) {
